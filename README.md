@@ -1,7 +1,7 @@
 # `eris` 🧬🍏✨
 
-[![PyPI version](https://img.shields.io/pypi/v/eris.svg)](https://pypi.org/project/eris/)
-[![Python versions](https://img.shields.io/pypi/pyversions/eris.svg)](https://pypi.org/project/eris/)
+[![PyPI version](https://img.shields.io/pypi/v/eris.svg)](https://pypi.org/project/pyeris/)
+[![Python versions](https://img.shields.io/pypi/pyversions/eris.svg)](https://pypi.org/project/pyeris/)
 [![Documentation](https://img.shields.io/badge/docs-GitHub_Pages-blue.svg)](https://tomdstanton.github.io/eris/)
 [![License](https://img.shields.io/github/license/tomdstanton/eris.svg)](LICENSE)
 
@@ -33,7 +33,7 @@ trapped passenger genes.
 
 Install directly from PyPI:
 ```bash
-pip install eris
+pip install pyeris
 ```
 
 ### Dependencies
