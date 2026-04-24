@@ -6,8 +6,9 @@ Standard aligners fail when an insertion shatters across multiple micro-contigs.
 
 ### The Separation of Concerns
 The architecture is strictly divided into two distinct worlds:
-* **The Vectorized Pipeline:** Extremely fast, array-based math utilizing `NumPy` to handle bulk alignments and gene predictions.
-* **The Object-Oriented Assembler:** Slower, highly precise topological logic that handles the biological realities of graph navigation and feature extraction.
+
+* **Vectorized Pipeline:** Extremely fast, array-based math utilizing `NumPy` to handle bulk alignments and gene predictions.
+* **Object-Oriented Assembler:** Slower, highly precise topological logic that handles the biological realities of graph navigation and feature extraction.
 
 ---
 
