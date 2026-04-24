@@ -64,6 +64,7 @@ eris -i assembly.gfa -d targets.fasta -o results/sample_A
 
 ### Outputs
 Depending on the arguments provided, eris will output:
+
 1. **`{prefix}_report.tsv`**: A detailed report of every resolved locus, including targets, context (INSIDE, UPSTREAM, DOWNSTREAM), biological effects, topological hops, and fractional depths.
 2. **`{prefix}_loci.fasta`**: The stitched nucleotide sequences for each assembled structural variant.
 3. **`{prefix}_assembly.gff`**: GFF3 annotation of the global features.
