@@ -5,9 +5,7 @@
 [![Documentation](https://img.shields.io/badge/docs-GitHub_Pages-blue.svg)](https://tomdstanton.github.io/eris/)
 [![License](https://img.shields.io/github/license/tomdstanton/eris.svg)](LICENSE)
 
-**Graph-aware contextual annotation of targeted genomic features.**
-
-							⋆⁺‧₊☽◯☾₊‧⁺⋆
+** ⋆⁺‧₊☽◯☾₊‧⁺⋆ Graph-aware contextual annotation of targeted genomic features. ⋆⁺‧₊☽◯☾₊‧⁺⋆ **
 
 `eris` is a bioinformatics pipeline designed to resolve and annotate shattered genomic
 features (like mobile genetic elements or structural variants) directly from assembly graphs.
@@ -18,8 +16,6 @@ bubbles and gaps.
 Crucially, it utilizes fractional read depth flow to distinguish between dominant wild-type structures and rare
 sub-clonal insertions, returning detailed evolutionary context including upstream flanks, downstream flanks, and
 trapped passenger genes.
-
-							⋆⁺‧₊☽◯☾₊‧⁺⋆
 
 ---
 

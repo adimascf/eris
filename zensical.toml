@@ -20,7 +20,6 @@ extra_javascript = [
 
 [theme]
 name = "material"
-logo = "⋆⁺‧₊☽◯☾₊‧⁺⋆"  # Replaces the default logo with a DNA emoji
 icon = { repo = "fontawesome/brands/github" }
 features = [
     "navigation.tabs",
