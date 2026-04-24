@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Any
 from threading import local as thread_local
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
@@ -466,7 +466,7 @@ class Pipeline:
 
         return contig_id, gene_batch, aln_batch, features, genes
 
-    def __call__(self, genome: 'GenomeAssembly') -> Iterable['Locus']:
+    def __call__(self, genome: 'GenomeAssembly', out: Optional[Any] = None) -> Iterable['Locus']:
         """Runs the full pipeline on a genome assembly."""
         alignments, gene_intervals, gene_features, gene_cds = {}, {}, {}, {}
 
@@ -475,6 +475,8 @@ class Pipeline:
                 gene_intervals[contig_id] = g_batch
                 gene_features[contig_id] = features
                 gene_cds[contig_id] = genes
+                if out:
+                    out.write_global_genes(contig_id, bytes(genome[contig_id]), genes)
             if a_batch:
                 alignments[contig_id] = a_batch
 

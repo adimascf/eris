@@ -92,12 +92,12 @@ def main():
 
         log.msg("⌛️ Running topological traversal...\n", flush=True)
 
-        for locus in pipeline(genome):
+        for locus in pipeline(genome, out=out):
             # Use the clean, encapsulated IO methods we built!
             out.write_locus_relations(locus)
 
             if out.locus_fasta:
-                out.write_locus_fasta(locus.id, locus.extract_sequence())
+                out.write_locus_fasta(locus.id, locus.extract_sequence(genome))
 
     log.msg("🎉 Pipeline completed!\n")
 
