@@ -37,7 +37,9 @@ pip install eris
 ```
 
 ### Dependencies
+
 `eris` relies on the following core libraries:
+
 * `numpy` (>=2.4)
 * `numba` (>=0.65)
 * `mappy` (>=2.3)
