@@ -1,4 +1,4 @@
-site_name = "eris"
+site_name = "🧬🍏✨ `eris`"
 site_description = "Graph-aware contextual annotation of targeted genomic features."
 site_url = "https://tomdstanton.github.io/eris/"
 repo_url = "https://github.com/tomdstanton/eris"
@@ -13,8 +13,14 @@ nav = [
     { "API Reference" = "api.md" },
 ]
 
+extra_javascript = [
+    "javascripts/mathjax.js",
+    "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"
+]
+
 [theme]
 name = "material"
+logo = "⋆⁺‧₊☽◯☾₊‧⁺⋆"  # Replaces the default logo with a DNA emoji
 icon = { repo = "fontawesome/brands/github" }
 features = [
     "navigation.tabs",
@@ -71,8 +77,3 @@ show_source = true
 heading_level = 2
 show_signature_annotations = true
 separate_signature = true
-
-extra_javascript = [
-    "javascripts/mathjax.js",
-    "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"
-]

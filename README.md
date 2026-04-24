@@ -1,4 +1,4 @@
-# eris
+# `eris` 🧬🍏✨
 
 [![PyPI version](https://img.shields.io/pypi/v/eris.svg)](https://pypi.org/project/eris/)
 [![Python versions](https://img.shields.io/pypi/pyversions/eris.svg)](https://pypi.org/project/eris/)
@@ -7,15 +7,19 @@
 
 **Graph-aware contextual annotation of targeted genomic features.**
 
-eris is a bioinformatics pipeline designed to resolve and annotate shattered genomic
+							⋆⁺‧₊☽◯☾₊‧⁺⋆
+
+`eris` is a bioinformatics pipeline designed to resolve and annotate shattered genomic
 features (like mobile genetic elements or structural variants) directly from assembly graphs.
 By employing a dynamic "Anchor-and-Traverse" depth-first search through de Bruijn/string graphs (GFA),
-eris stitches together split alignments across multiple micro-contigs, seamlessly bridging sequence
+`eris` stitches together split alignments across multiple micro-contigs, seamlessly bridging sequence
 bubbles and gaps.
 
 Crucially, it utilizes fractional read depth flow to distinguish between dominant wild-type structures and rare
 sub-clonal insertions, returning detailed evolutionary context including upstream flanks, downstream flanks, and
 trapped passenger genes.
+
+							⋆⁺‧₊☽◯☾₊‧⁺⋆
 
 ---
 
@@ -29,7 +33,7 @@ trapped passenger genes.
 
 ## 📦 Installation
 
-eris requires **Python 3.11 or later**.
+`eris` requires **Python 3.11 or later**.
 
 Install directly from PyPI:
 ```bash
@@ -37,7 +41,7 @@ pip install eris
 ```
 
 ### Dependencies
-eris relies on the following core libraries:
+`eris` relies on the following core libraries:
 * `numpy` (>=2.4)
 * `numba` (>=0.65)
 * `mappy` (>=2.3)
@@ -46,7 +50,7 @@ eris relies on the following core libraries:
 
 ## 🛠️ Usage
 
-eris installs a command-line interface `eris` for immediate use.
+`eris` installs a command-line interface `eris` for immediate use.
 
 ```bash
 eris -i assembly.gfa -d targets.fasta -o results/sample_A
@@ -73,7 +77,7 @@ For detailed guides, API reference, and advanced configuration, visit the [eris 
 
 ## 💻 Development
 
-eris uses [`hatch`](https://hatch.pypa.io/) for build and environment management.
+`eris` uses [`hatch`](https://hatch.pypa.io/) for build and environment management.
 
 To set up a local development environment ([uv](https://docs.astral.sh/uv/getting-started/installation/) needs to be installed):
 ```bash
@@ -84,7 +88,9 @@ make dev
 ```
 
 ### Running Tests & Linting
-eris enforces rigorous type checking and linting.
+
+`eris` enforces rigorous type checking and linting.
+
 ```bash
 # Run tests
 pytest
@@ -104,3 +110,7 @@ This project is licensed under the terms of the LICENSE file included in the rep
 ## 🤝 Authors
 
 * **Tom Stanton** - [tomdstanton@gmail.com](mailto:tomdstanton@gmail.com)
+
+---
+
+![eris](https://static.wikia.nocookie.net/dreamworks/images/6/6f/Sinbad-disneyscreencaps.com-1100.jpg/revision/latest?cb=20240311205845)
