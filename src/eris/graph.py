@@ -383,7 +383,7 @@ class TopologyEngine:
         visited_edges = {(start_node, exit_strand)}
 
         while queue:
-            curr_ctg, curr_exit, rem_hops, hop_num, shift = queue.pop(0)
+            curr_ctg, curr_exit, rem_hops, node_depth, shift = queue.pop(0)
             if rem_hops <= 0: continue
 
             for edge in self._graph.get_neighbors(curr_ctg):
@@ -406,17 +406,15 @@ class TopologyEngine:
 
                         batch = n_ints.filter(valid_indices)
                         new_shift = shift + self.contig_lengths[curr_ctg]
-                        flip_len = self.contig_lengths[v] if edge.u_strand != edge.v_strand else None
+                        flip_len = self.contig_lengths[v] if edge.v_strand == Strand.REVERSE else None
 
                         projected_batch = batch.project(shift=new_shift, flip_length=flip_len)
-                        projected_results.append((v, hop_num, projected_batch))
+                        projected_results.append((v, node_depth, projected_batch))
 
                         found_count = len(valid_indices)
                         rem_hops -= found_count
-                        hop_num += found_count
 
                 if rem_hops > 0:
-                    queue.append((v, edge.v_strand, rem_hops, hop_num, shift + self.contig_lengths[curr_ctg]))
+                    queue.append((v, edge.v_strand, rem_hops, node_depth + 1, shift + self.contig_lengths[curr_ctg]))
 
         return projected_results
-

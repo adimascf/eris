@@ -275,7 +275,15 @@ class AlignmentBatch:
             length = e - s
             if length <= 0: continue
             kept = kept_intervals[t_name]
-            if any(max(0, min(e, ke) - max(s, ks)) / length > max_overlap_fraction for ks, ke in kept): continue
+
+            overlap_found = False
+            for ks, ke in kept:
+                overlap = min(e, ke) - max(s, ks)
+                if overlap > 0 and (overlap / length) > max_overlap_fraction:
+                    overlap_found = True
+                    break
+            if overlap_found: continue
+
             kept.append((s, e))
             kept_mask[idx] = True
         return self.filter(kept_mask)

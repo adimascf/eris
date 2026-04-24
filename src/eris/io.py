@@ -9,6 +9,7 @@ from re import compile as re_compile
 from gzip import open as gzopen
 from bz2 import open as bzopen
 from lzma import open as lzopen
+from sys import stdout
 
 from Bio.Seq import Seq
 from Bio.SeqIO.FastaIO import FastaIterator
@@ -276,7 +277,7 @@ class OutputManager:
         if self.prefix:
             self.tsv_handle = self._stack.enter_context(open(f"{self.prefix}_report.tsv", "w"))
         else:
-            self.tsv_handle = sys.stdout
+            self.tsv_handle = stdout
 
         # Write TSV Header dynamically from the dataclass
         self.tsv_handle.write(ReportRow.header())

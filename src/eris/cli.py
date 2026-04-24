@@ -33,13 +33,13 @@ def main():
     )
 
     inputs = parser.add_argument_group('📁', 'Input arguments')
-    inputs.add_argument('-i', '--genome', type=Path, required=True,
+    inputs.add_argument('-i', '--genome', type=Path, required=True, metavar='',
                         help='Path to a genome in fasta or GFA format; File may be compressed.')
-    inputs.add_argument('-d', '--targets', type=Path, required=True,
+    inputs.add_argument('-d', '--targets', type=Path, required=True, metavar='',
                         help='Path to target nucleotide features in fasta or mmi format')
 
     outs = parser.add_argument_group('💾', 'Output arguments')
-    outs.add_argument('-o', '--outprefix', type=str, default=None,
+    outs.add_argument('-o', '--outprefix', type=str, default=None, metavar='',
                       help='Prefix for output files (if absent, prints TSV to stdout)')
     outs.add_argument('--no-gff', action='store_true',
                       help='Do not write GFF3 output for global genes')
@@ -47,17 +47,17 @@ def main():
                       help='Do not write FAA output for global proteins')
 
     pipeline_args = parser.add_argument_group('⚙️', 'Pipeline arguments')
-    pipeline_args.add_argument('--hops', type=int, default=3,  # Removed -h collision
+    pipeline_args.add_argument('--hops', type=int, default=3, metavar='',
                         help='Maximum number of contextual genes to sweep upstream/downstream')
-    pipeline_args.add_argument('-l', '--tolerance', type=int, default=0,
+    pipeline_args.add_argument('-l', '--tolerance', type=int, default=0, metavar='',
                         help='Distance tolerance (bp) for merging clustered target alignments')
-    pipeline_args.add_argument('-t', '--max-workers', type=int, default=None,
+    pipeline_args.add_argument('-t', '--max-workers', type=int, default=None, metavar='',
                         help='Maximum number of worker threads for alignment and CDS prediction')
 
     targets = parser.add_argument_group('🎯', 'Target arguments')
-    targets.add_argument('-f', '--feature-type', choices=[e.value for e in FeatureType], default=FeatureType.CDS.value,
-                        help='Type of feature to annotate')
-    targets.add_argument('--indexing-threads', type=int, default=3,
+    targets.add_argument('-f', '--feature-type', choices=[e.value for e in FeatureType], metavar='', 
+                         default=FeatureType.CDS.value, help='Type of feature to annotate')
+    targets.add_argument('--indexing-threads', type=int, default=3, metavar='',
                         help='Number of threads to use for indexing if not already indexed')
 
     opts = parser.add_argument_group('🛠️', 'Other options')

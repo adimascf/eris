@@ -16,7 +16,7 @@ from pyfgs import GeneFinder, Model, Gene, Mutation
 from eris.io import TargetDatabase, GenomeAssembly
 from eris.graph import TopologyEngine
 from eris.alignment import AlignmentBatch, AlignmentRecord
-from eris.interval import IntervalBatch, Context, Strand
+from eris.interval import IntervalBatch, Context, Strand, Interval
 from eris.constants import FeatureType, Orientation, Effect
 
 
@@ -213,8 +213,18 @@ class LocusBuilder:
         orig_idx = interval_batch.original_indices[idx]  # type: int
         feature = self.features[contig][orig_idx]  # type: GenomicFeature
         raw_pyfgs_gene = self.genes[contig][orig_idx]  # type: Gene
+        gene_strand = Strand(interval_batch.strands[idx])
+
+        # Determine strict relational spatial context natively using coordinate limits for local genes
+        if topo == 0:
+            target_interval = Interval(target_bounds[0], target_bounds[1], target_strand)
+            gene_interval = Interval(interval_batch.starts[idx], interval_batch.ends[idx], gene_strand)
+            spatial = target_interval.relate(gene_interval)
 
         effect = Effect.NONE
+
+        if spatial in (Context.OVERLAPPING, Context.OVERLAPPING_START, Context.OVERLAPPING_END):
+            effect = Effect.DISRUPTED
 
         # If the gene was biologically broken by the insertion
         if raw_pyfgs_gene.insertions or raw_pyfgs_gene.deletions:
@@ -224,10 +234,9 @@ class LocusBuilder:
                 dist_to_end = abs(mut.pos - target_bounds[1])
 
                 if dist_to_start <= 5 or dist_to_end <= 5:
-                    effect |= Effect.TRUNCATED  # Assuming Effect is a Flag
+                    effect = Effect.TRUNCATED if effect == Effect.NONE else effect | Effect.TRUNCATED
                     break
 
-        gene_strand = Strand(interval_batch.strands[idx])
         if target_strand == Strand.UNSTRANDED or gene_strand == Strand.UNSTRANDED:
             orientation = Orientation.NONE
         elif target_strand == gene_strand:
@@ -251,26 +260,30 @@ class LocusBuilder:
         if intervals:
             if walk_direction == -1:
                 idx = np.searchsorted(intervals.ends, boundary, side='right')
-                for dist, i in enumerate(reversed(range(max(0, idx - self.max_feature_hops), idx)), 1):
-                    f = self._resolve_relation(contig, i, intervals, context, 0, dist, target_strand, target_bounds)
+                for i in reversed(range(max(0, idx - self.max_feature_hops), idx)):
+                    d = max(0, boundary - intervals.ends[i])
+                    f = self._resolve_relation(contig, i, intervals, context, int(d), 0, target_strand, target_bounds)
                     dest_list.append(f)
                     rem_hops -= 1
             else:
                 idx = np.searchsorted(intervals.starts, boundary, side='left')
-                for dist, i in enumerate(range(idx, min(len(intervals), idx + self.max_feature_hops)), 1):
-                    f = self._resolve_relation(contig, i, intervals, context, 0, dist, target_strand, target_bounds)
+                for i in range(idx, min(len(intervals), idx + self.max_feature_hops)):
+                    d = max(0, intervals.starts[i] - boundary)
+                    f = self._resolve_relation(contig, i, intervals, context, int(d), 0, target_strand, target_bounds)
                     dest_list.append(f)
                     rem_hops -= 1
 
         # 2. Graph Spillover
         if rem_hops > 0:
-            current_hop = (self.max_feature_hops - rem_hops) + 1
-            for s_ctg, _, batch in self.topology_engine.traverse(contig, exit_strand, rem_hops):
+            for s_ctg, node_depth, batch in self.topology_engine.traverse(contig, exit_strand, rem_hops):
                 for i in range(len(batch)):
+                    if walk_direction == -1:
+                        d = max(0, boundary + batch.starts[i] - self.genome.contig_lengths[contig])
+                    else:
+                        d = max(0, batch.starts[i] - boundary)
                     dest_list.append(
-                        self._resolve_relation(s_ctg, i, batch, context, 0, current_hop, target_strand, target_bounds)
+                        self._resolve_relation(s_ctg, i, batch, context, int(d), node_depth, target_strand, target_bounds)
                     )
-                    current_hop += 1
 
     def _build_local(self, contig: str, alignment_batch: 'AlignmentBatch', gene_intervals: 'IntervalBatch') -> list[
         'Locus']:
@@ -306,9 +319,16 @@ class LocusBuilder:
                     self._resolve_relation(contig, idx, gene_intervals, Context.INSIDE, 0, 0, primary_strand,
                                            macro_bounds))
 
-            self._extract_flanks(contig, macro.start, -1, Context.UPSTREAM, gene_intervals, locus.upstream_flanks,
+            if primary_strand == Strand.REVERSE:
+                u_dir, u_bound = 1, macro.end
+                d_dir, d_bound = -1, macro.start
+            else:
+                u_dir, u_bound = -1, macro.start
+                d_dir, d_bound = 1, macro.end
+
+            self._extract_flanks(contig, u_bound, u_dir, Context.UPSTREAM, gene_intervals, locus.upstream_flanks,
                                  primary_strand, macro_bounds)
-            self._extract_flanks(contig, macro.end, 1, Context.DOWNSTREAM, gene_intervals, locus.downstream_flanks,
+            self._extract_flanks(contig, d_bound, d_dir, Context.DOWNSTREAM, gene_intervals, locus.downstream_flanks,
                                  primary_strand, macro_bounds)
 
             loci.append(locus)
@@ -442,7 +462,7 @@ class Pipeline:
                 ))
 
             gene_batch = IntervalBatch(starts=starts, ends=ends, strands=strands,
-                                       original_indices=np.arange(num_genes, dtype=np.int32))
+                                       original_indices=np.arange(num_genes, dtype=np.int32)).sort()
 
         return contig_id, gene_batch, aln_batch, features, genes
 

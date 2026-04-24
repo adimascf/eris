@@ -1,5 +1,5 @@
 [project]
-name = "eris"
+name = "pyeris"  # "eris" is taken on pypi
 authors = [{name = "Tom Stanton", email = "tomdstanton@gmail.com"}]
 description = "Graph-aware contextual annotation of targeted genomic features"
 dependencies = ["numpy>=2.4", "numba>=0.65", "mappy>=2.3", "pyfgs>=0.0.1", "biopython>=1.87"]
