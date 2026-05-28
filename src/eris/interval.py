@@ -1,6 +1,7 @@
 """
 Genomic interval representation with strand and context, plus batched interval operations.
 """
+from __future__ import annotations
 from dataclasses import dataclass
 from typing import Union, Match, NamedTuple, Self, Iterable, Optional
 import numpy as np
