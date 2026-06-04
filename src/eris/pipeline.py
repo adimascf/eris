@@ -129,6 +129,7 @@ class Locus:
     upstream_flanks: list['FeatureRelation']
     downstream_flanks: list['FeatureRelation']
     fractional_depth: float = 1.0  # Tracks the sub-clonal abundance
+    estimated_copies: int = 1
 
     def extract_sequence(self, genome: 'GenomeAssembly') -> str:
         """
@@ -197,8 +198,8 @@ class LocusBuilder:
         cleaned_alignments, resolved_paths = self.topology_engine.resolve_split_alignments(alignments)
 
         # Iterate over paths of arbitrary length
-        for path in resolved_paths:
-            yield self._stitch(path)
+        for path, estimated_copies in resolved_paths:
+            yield self._stitch(path, estimated_copies)
 
         for contig_id, batch in cleaned_alignments.items():
             contig_gene_intervals = self.topology_engine.features.get(contig_id, IntervalBatch.empty())
@@ -304,9 +305,14 @@ class LocusBuilder:
                 for t in targets
             ]
 
+            local_depth = self.genome.contig_depths.get(contig, 1.0)
+            baseline = getattr(self.topology_engine, 'global_median_depth', 1.0)
+            local_est_copies = max(1, round(local_depth / baseline))
+
             locus = Locus(
                 id=f"locus_{uuid4().hex[:8]}", contig=contig, start=macro.start, end=macro.end,
-                targets=target_features, passengers=[], upstream_flanks=[], downstream_flanks=[]
+                targets=target_features, passengers=[], upstream_flanks=[], downstream_flanks=[],
+                estimated_copies=local_est_copies
             )
 
             # Determine macro target context bounds
@@ -335,7 +341,7 @@ class LocusBuilder:
 
         return loci
 
-    def _stitch(self, fragments: list['AlignmentRecord']) -> 'Locus':
+    def _stitch(self, fragments: list['AlignmentRecord'], estimated_copies: int) -> 'Locus':
         """Stitches multiple fragments into a single multi-contig locus."""
         first = fragments[0]
         last = fragments[-1]
@@ -360,7 +366,8 @@ class LocusBuilder:
             end=last.t_end,
             targets=[target_feature], passengers=[],
             upstream_flanks=[], downstream_flanks=[],
-            fractional_depth=frac_depth  # NEW: Assign it to the Locus
+            fractional_depth=frac_depth,  # NEW: Assign it to the Locus
+            estimated_copies=estimated_copies
         )
 
         # 2. UPSTREAM FLANKS (Strictly from the first fragment)

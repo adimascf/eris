@@ -235,6 +235,7 @@ class ReportRow:
     orientation: str
     effect: str
     fractional_depth: float
+    estimated_copies: int
 
     @classmethod
     def header(cls) -> str:
@@ -243,7 +244,7 @@ class ReportRow:
 
     def to_tsv(self) -> str:
         """Formats the row data into a tab-separated string."""
-        return f"{self.locus_id}\t{self.target}\t{self.gene_id}\t{self.context}\t{self.dist_bp}\t{self.topo_hops}\t{self.orientation}\t{self.effect}\t{self.fractional_depth}\n"
+        return f"{self.locus_id}\t{self.target}\t{self.gene_id}\t{self.context}\t{self.dist_bp}\t{self.topo_hops}\t{self.orientation}\t{self.effect}\t{self.fractional_depth}\t{self.estimated_copies}\n"
 
 
 class OutputManager:
@@ -317,6 +318,8 @@ class OutputManager:
 
     def _write_tsv_row(self, locus: 'Locus', relation: 'FeatureRelation'):
         """Constructs a ReportRow dataclass and writes it to the TSV handle."""
+
+        copies = getattr(locus, 'estimated_copies', 1)
         row = ReportRow(
             locus_id=locus.id,
             target=",".join(t.id for t in locus.targets),
@@ -326,7 +329,8 @@ class OutputManager:
             topo_hops=relation.topological_dist,
             orientation=relation.orientation.value,
             effect=relation.effect.name,
-            fractional_depth=locus.fractional_depth
+            fractional_depth=locus.fractional_depth,
+            estimated_copies=copies
         )
         self.tsv_handle.write(row.to_tsv())
 

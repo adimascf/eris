@@ -123,7 +123,7 @@ class TopologyEngine:
     It provides tools for "stitching" together partial alignments that span
     multiple contigs by finding valid physical paths through the graph.
     """
-    __slots__ = ('_graph', 'contig_lengths', 'contig_depths', 'features', '_visited_nodes')
+    __slots__ = ('_graph', 'contig_lengths', 'contig_depths', 'features', '_visited_nodes', 'global_median_depth')
 
     def __init__(self, edges: Iterable[Edge], contig_lengths: dict[str, int], contig_depths: dict[str, float],
                  features: dict[str, IntervalBatch] = None):
@@ -141,6 +141,15 @@ class TopologyEngine:
         self.contig_depths: dict[str, float] = contig_depths
         self.features: dict[str, IntervalBatch] = features or {}
         self._visited_nodes: set[tuple[str, int]] = set()
+
+        # Get median depth in the assembly graph. This will be use as a baseline to estimate target copy number
+        if contig_depths:
+            # Filter for contigs > 100bp to get a stable baseline
+            depth_values = [d for c, d in contig_depths.items() if contig_lengths.get(c, 0) > 100]
+            self.global_median_depth = float(np.median(depth_values)) if depth_values else 1.0
+        else:
+            self.global_median_depth = 1.0
+
 
     def resolve_split_alignments(self, alignments: dict) -> tuple[dict, list[list['AlignmentRecord']]]:
         """
@@ -243,7 +252,11 @@ class TopologyEngine:
 
                 # If the DFS successfully chained multiple fragments together
                 if len(best_chain_used) > 1:
-                    resolved_paths.append(best_chain)
+
+                    # Copy number estimation
+                    copy_number = self._estimate_copy_number(best_chain)
+                    # Store as tuple: (chain, copy_number)
+                    resolved_paths.append((best_chain, copy_number))
                     used_in_this_qname.update(best_chain_used)
 
                     # Mark these specific records as "consumed" by the stitcher
@@ -265,6 +278,37 @@ class TopologyEngine:
                 cleaned_alignments[contig_id] = intact_batch
 
         return cleaned_alignments, resolved_paths
+
+    def _estimate_copy_number(self, chain: list['AlignmentRecord']) -> int:
+        """
+        Estimate copy number for a stitched IS chain.
+
+        Uses the MEDIAN depth of ONLY the real (non-synthetic) IS-aligned contigs,
+        compared to the global median depth of the genome.
+
+        Args:
+            chain: List of AlignmentRecords forming the stitched path
+
+        Returns:
+            Estimated copy number (int, minimum 1)
+        """
+        # Get depths of REAL fragments (idx != -1 means real alignment)
+        real_fragment_depths = [
+            self.contig_depths.get(frag.t_name, 1.0)
+            for frag in chain
+            if frag.idx != -1  # Only real alignments, not synthetic
+        ]
+
+        if not real_fragment_depths:
+            return 1
+
+        # Use median of the aligned IS fragments
+        is_median_depth = float(np.median(real_fragment_depths))
+
+        # Compare to global genome median
+        copy_number = max(1, round(is_median_depth / self.global_median_depth))
+
+        return copy_number
 
     def _build_stitching_payload(self, h_u: 'AlignmentRecord', h_v: 'AlignmentRecord', path_contigs: list[str]) -> list[
         'AlignmentRecord']:
