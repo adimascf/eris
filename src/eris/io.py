@@ -259,7 +259,7 @@ class OutputManager:
         >>>     out.write_locus_relations(locus)
     """
 
-    def __init__(self, prefix: Optional[str], write_gff: bool = True, write_faa: bool = True, write_fna: bool = True):
+    def __init__(self, prefix: Optional[str], write_gff: bool = True, write_faa: bool = True):
         """
         Initialize the OutputManager.
 
@@ -271,8 +271,6 @@ class OutputManager:
         self.prefix = prefix
         self.write_gff = write_gff
         self.write_faa = write_faa
-        self.write_fna = write_fna
-
         self._stack = ExitStack()
 
     def __enter__(self):
@@ -288,16 +286,12 @@ class OutputManager:
         # 2. Setup Optional PyFGS Writers
         self.gff_writer = None
         self.faa_writer = None
-        self.fna_writer = None
 
         if self.prefix and self.write_gff:
             self.gff_writer = self._stack.enter_context(Gff3Writer(f"{self.prefix}_assembly.gff"))
 
         if self.prefix and self.write_faa:
             self.faa_writer = self._stack.enter_context(FaaWriter(f"{self.prefix}_proteins.faa"))
-
-        if self.prefix and self.write_fna:
-            self.fna_writer = self._stack.enter_context(FnaWriter(f"{self.prefix}_cds.fna"))
 
         # 3. Setup Locus FASTA writer
         self.locus_fasta = None
@@ -335,13 +329,11 @@ class OutputManager:
         self.tsv_handle.write(row.to_tsv())
 
     def write_global_genes(self, contig_id: str, sequence: Union[str, bytes], genes: list['Gene']):
-        """Writes assembly-wide gene calls to the GFF3, FAA, and FNA files."""
+        """Writes assembly-wide gene calls to the GFF3 and FAA files."""
         if self.gff_writer:
             self.gff_writer.write_record(genes, contig_id, sequence)
         if self.faa_writer:
             self.faa_writer.write_record(genes, contig_id)
-        if self.fna_writer:
-            self.fna_writer.write_record(genes, contig_id)
 
     def write_locus_fasta(self, locus_id: str, sequence: str):
         """Writes a single locus nucleotide sequence to the loci FASTA file."""

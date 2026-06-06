@@ -45,8 +45,6 @@ def main():
                       help='Do not write GFF3 output for global genes')
     outs.add_argument('--no-faa', action='store_true',
                       help='Do not write FAA output for global proteins')
-    outs.add_argument('--no-fna', action='store_true',
-                      help='Do not write FNA output for global transcripts (CDS)')
 
     pipeline_args = parser.add_argument_group('⚙️', 'Pipeline arguments')
     pipeline_args.add_argument('--hops', type=int, default=3, metavar='',
@@ -90,7 +88,7 @@ def main():
 
     # Hook up the OutputManager parameters explicitly
     with (Pipeline(target_db, args.hops, args.tolerance, args.max_workers) as pipeline,
-          OutputManager(args.outprefix, write_gff=not args.no_gff, write_faa=not args.no_faa, write_fna=not args.no_fna) as out):
+          OutputManager(args.outprefix, write_gff=not args.no_gff, write_faa=not args.no_faa) as out):
 
         log.msg("⌛️ Running topological traversal...\n", flush=True)
 
