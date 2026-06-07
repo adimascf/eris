@@ -188,7 +188,7 @@ class AlignmentBatch:
         data = [
             (q_name, q_length, h.q_st, h.q_en, h.ctg, h.ctg_len, h.r_st, h.r_en,
              h.strand, h.blen, h.mlen, h.NM, h.mapq, h.cigar_str)
-            for h in alignments
+            for h in alignments if h.is_primary
         ]
 
         if not data:
