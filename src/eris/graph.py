@@ -256,13 +256,33 @@ class TopologyEngine:
                 # If the DFS successfully chained multiple fragments together
                 if len(best_chain_used) > 1:
 
-                    resolved_paths.append(best_chain)
+                    # Temporarily store all valid chains for this specific IS
+                    if 'qname_chains' not in locals(): qname_chains = []
+                    qname_chains.append(best_chain)
                     used_in_this_qname.update(best_chain_used)
 
-                    # Mark these specific records as "consumed" by the stitcher
-                    for f in best_chain:
-                        if f.idx != -1:  # Ignore the synthetic nodes
-                            used_records.add((f.t_name, f.idx))
+            if 'qname_chains' in locals() and qname_chains:
+                if self.mode == 'collapse':
+                    # Pick the single chain that covers the most IS sequence
+                    dominant_chain = max(qname_chains, key=lambda c: c[-1].q_end - c[0].q_start)
+                    resolved_paths.append(dominant_chain)
+
+                    # Consume ALL fragments from ALL chains to ensure the alternate
+                    # bubble flanks don't accidentally get processed as unstitched debris
+                    for chain in qname_chains:
+                        for f in chain:
+                            if f.idx != -1:
+                                used_records.add((f.t_name, f.idx))
+
+                else:
+                    # VARIANT MODE: Keep all resolved structural paths
+                    for chain in qname_chains:
+                        resolved_paths.append(chain)
+                        for f in chain:
+                            if f.idx != -1:
+                                used_records.add((f.t_name, f.idx))
+
+                del qname_chains # Clean up for the next IS target
 
         # 3. Rebuild cleaned alignments (The Safety Net)
         cleaned_alignments = {}
