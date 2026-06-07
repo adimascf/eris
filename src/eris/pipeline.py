@@ -186,24 +186,45 @@ class LocusBuilder:
         self.features = features or {}
         self.genes = genes or {}
 
-    def assemble(self, alignments: dict) -> Iterable['Locus']:
+    def assemble(self, alignments: dict, min_coverage: float = 0.30) -> Iterable['Locus']:
         """
         The main entry point for generating loci.
 
         Stitches graph-spanning alignments and processes local alignments
         to produce a sequence of Locus objects.
         """
+        # # Now expects a list of paths (lists of AlignmentRecords) instead of pairs
+        # cleaned_alignments, resolved_paths = self.topology_engine.resolve_split_alignments(alignments)
+
+        # # Iterate over paths of arbitrary length
+        # for path in resolved_paths:
+        #     yield self._stitch(path)
+
+        # for contig_id, batch in cleaned_alignments.items():
+        #     contig_gene_intervals = self.topology_engine.features.get(contig_id, IntervalBatch.empty())
+        #     for locus in self._build_local(contig_id, batch, contig_gene_intervals):
+        #         yield locus
+
         # Now expects a list of paths (lists of AlignmentRecords) instead of pairs
         cleaned_alignments, resolved_paths = self.topology_engine.resolve_split_alignments(alignments)
 
-        # Iterate over paths of arbitrary length
+        # Filter and yield STITCHED paths
         for path in resolved_paths:
-            yield self._stitch(path)
+            # Calculate total coverage of the stitched path against the IS query
+            coverage = (path[-1].q_end - path[0].q_start) / path[0].q_length
+            if coverage >= min_coverage:
+                yield self._stitch(path)
 
+        # Filter and yield LOCAL (unstitched) alignments
         for contig_id, batch in cleaned_alignments.items():
-            contig_gene_intervals = self.topology_engine.features.get(contig_id, IntervalBatch.empty())
-            for locus in self._build_local(contig_id, batch, contig_gene_intervals):
-                yield locus
+            # Vectorized coverage filter for the remaining unstitched hits
+            cov_mask = ((batch.q_ends - batch.q_starts) / batch.q_lengths) >= min_coverage
+            intact_batch = batch.filter(cov_mask)
+
+            if len(intact_batch) > 0:
+                contig_gene_intervals = self.topology_engine.features.get(contig_id, IntervalBatch.empty())
+                for locus in self._build_local(contig_id, intact_batch, contig_gene_intervals):
+                    yield locus
 
     def _resolve_relation(self, contig: str, idx: int, interval_batch: 'IntervalBatch',
                           spatial: Context, dist: int, topo: int, target_strand: Strand,
