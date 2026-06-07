@@ -129,7 +129,6 @@ class Locus:
     upstream_flanks: list['FeatureRelation']
     downstream_flanks: list['FeatureRelation']
     fractional_depth: float = 1.0  # Tracks the sub-clonal abundance
-    estimated_copies: int = 1
 
     def extract_sequence(self, genome: 'GenomeAssembly') -> str:
         """
@@ -198,8 +197,8 @@ class LocusBuilder:
         cleaned_alignments, resolved_paths = self.topology_engine.resolve_split_alignments(alignments)
 
         # Iterate over paths of arbitrary length
-        for path, estimated_copies in resolved_paths:
-            yield self._stitch(path, estimated_copies)
+        for path in resolved_paths:
+            yield self._stitch(path)
 
         for contig_id, batch in cleaned_alignments.items():
             contig_gene_intervals = self.topology_engine.features.get(contig_id, IntervalBatch.empty())
@@ -305,14 +304,9 @@ class LocusBuilder:
                 for t in targets
             ]
 
-            local_depth = self.genome.contig_depths.get(contig, 1.0)
-            baseline = getattr(self.topology_engine, 'global_median_depth', 1.0)
-            local_est_copies = max(1, round(local_depth / baseline))
-
             locus = Locus(
                 id=f"locus_{uuid4().hex[:8]}", contig=contig, start=macro.start, end=macro.end,
-                targets=target_features, passengers=[], upstream_flanks=[], downstream_flanks=[],
-                estimated_copies=local_est_copies
+                targets=target_features, passengers=[], upstream_flanks=[], downstream_flanks=[]
             )
 
             # Determine macro target context bounds
@@ -341,15 +335,19 @@ class LocusBuilder:
 
         return loci
 
-    def _stitch(self, fragments: list['AlignmentRecord'], estimated_copies: int) -> 'Locus':
+    def _stitch(self, fragments: list['AlignmentRecord']) -> 'Locus':
         """Stitches multiple fragments into a single multi-contig locus."""
         first = fragments[0]
         last = fragments[-1]
 
-        # Calculate the fractional flow of the stitched path
-        source_depth = self.genome.contig_depths.get(first.t_name, 1.0)
-        bottleneck_depth = min(self.genome.contig_depths.get(f.t_name, 1.0) for f in fragments)
-        frac_depth = round(bottleneck_depth / source_depth, 3) if source_depth > 0 else 1.0
+        if getattr(self.topology_engine, 'mode', 'variant') == 'collapse':
+            max_path_depth = max(self.genome.contig_depths.get(f.t_name, 1.0) for f in fragments)
+            metric_val = float(max(1, round(max_path_depth / self.topology_engine.median_depth)))
+        else:
+            # Calculate the fractional flow of the stitched path
+            source_depth = self.genome.contig_depths.get(first.t_name, 1.0)
+            bottleneck_depth = min(self.genome.contig_depths.get(f.t_name, 1.0) for f in fragments)
+            metric_val = round(bottleneck_depth / source_depth, 3) if source_depth > 0 else 1.0
 
         # 1. Build the multi-segment target feature across ALL fragments
         segments = [LocationSegment(f.t_name, f.t_start, f.t_end, Strand(f.strand)) for f in fragments]
@@ -366,8 +364,7 @@ class LocusBuilder:
             end=last.t_end,
             targets=[target_feature], passengers=[],
             upstream_flanks=[], downstream_flanks=[],
-            fractional_depth=frac_depth,  # NEW: Assign it to the Locus
-            estimated_copies=estimated_copies
+            fractional_depth=metric_val  # Holds either frac_depth or copy_number; NEW: Assign it to the Locus
         )
 
         # 2. UPSTREAM FLANKS (Strictly from the first fragment)
@@ -412,11 +409,11 @@ class Pipeline:
     gene calling, graph building, and locus assembly. Uses a thread pool
     for parallel contig processing.
     """
-    __slots__ = ('target_db', '_gene_finder', 'max_feature_hops', 'locus_tolerance', '_executor')
+    __slots__ = ('target_db', '_gene_finder', 'max_feature_hops', 'locus_tolerance', '_executor', 'mode')
     _THREAD_LOCAL = thread_local()
 
     def __init__(self, target_db: 'TargetDatabase', max_feature_hops: int = 3, locus_tolerance: int = 0,
-                 max_workers: Optional[int] = None):
+                 max_workers: Optional[int] = None, mode: str = 'variant'):
         """
         Initialize the Pipeline.
 
@@ -429,6 +426,7 @@ class Pipeline:
         self.target_db = target_db
         self.max_feature_hops = max_feature_hops
         self.locus_tolerance = locus_tolerance
+        self.mode = mode
         self._gene_finder = GeneFinder(model=Model.Complete, whole_genome=False)
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
 
@@ -491,7 +489,19 @@ class Pipeline:
         #     for n, _ in enumerate(batch.q_names):
         #         print(batch.get_record(n))
 
-        topology_engine = TopologyEngine(genome.edges, genome.contig_lengths, genome.contig_depths, gene_intervals)
+        # Calculate global median depth for the collapse mode
+        if genome.contig_depths:
+            median_depth = max(0.001, float(np.median(list(genome.contig_depths.values()))))
+        else:
+            median_depth = 1.0
+
+        topology_engine = TopologyEngine(
+            edges=genome.edges,
+            contig_lengths=genome.contig_lengths,
+            contig_depths=genome.contig_depths,
+            features=gene_intervals,
+            mode=self.mode,
+            median_depth=median_depth)
 
         builder = LocusBuilder(
             topology_engine=topology_engine,

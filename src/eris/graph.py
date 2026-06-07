@@ -123,10 +123,10 @@ class TopologyEngine:
     It provides tools for "stitching" together partial alignments that span
     multiple contigs by finding valid physical paths through the graph.
     """
-    __slots__ = ('_graph', 'contig_lengths', 'contig_depths', 'features', '_visited_nodes', 'global_median_depth')
+    __slots__ = ('_graph', 'contig_lengths', 'contig_depths', 'features', '_visited_nodes', 'mode', 'median_depth')
 
     def __init__(self, edges: Iterable[Edge], contig_lengths: dict[str, int], contig_depths: dict[str, float],
-                 features: dict[str, IntervalBatch] = None):
+                 features: dict[str, IntervalBatch] = None, mode: str = 'variant', median_depth: float = 1.0):
         """
         Initialize the TopologyEngine.
 
@@ -142,13 +142,8 @@ class TopologyEngine:
         self.features: dict[str, IntervalBatch] = features or {}
         self._visited_nodes: set[tuple[str, int]] = set()
 
-        # Get median depth in the assembly graph. This will be use as a baseline to estimate target copy number
-        if contig_depths:
-            # Filter for contigs > 100bp to get a stable baseline
-            depth_values = [d for c, d in contig_depths.items() if contig_lengths.get(c, 0) > 100]
-            self.global_median_depth = float(np.median(depth_values)) if depth_values else 1.0
-        else:
-            self.global_median_depth = 1.0
+        self.mode: str = mode
+        self.median_depth: float = median_depth
 
 
     def resolve_split_alignments(self, alignments: dict) -> tuple[dict, list[list['AlignmentRecord']]]:
@@ -213,11 +208,19 @@ class TopologyEngine:
                             continue
 
                         # Ask the graph if these two fragments physically connect
-                        paths = self._find_bounded_paths(
-                            curr_frag.t_name, curr_frag.strand,
-                            next_frag.t_name, next_frag.strand,
-                            expected_gap, tolerance=2000
-                        )
+                        if self.mode == 'collapse':
+                            paths = self._find_collapsed_path(
+                                curr_frag.t_name, curr_frag.strand,
+                                next_frag.t_name, next_frag.strand,
+                                expected_gap, tolerance=2000
+                            )
+                        else:
+                            paths = self._find_bounded_paths(
+                                curr_frag.t_name, curr_frag.strand,
+                                next_frag.t_name, next_frag.strand,
+                                expected_gap, tolerance=2000
+                            )
+
 
                         if paths:
                             path_lengths = np.array([p['length'] for p in paths])
@@ -253,10 +256,7 @@ class TopologyEngine:
                 # If the DFS successfully chained multiple fragments together
                 if len(best_chain_used) > 1:
 
-                    # Copy number estimation
-                    copy_number = self._estimate_copy_number(best_chain)
-                    # Store as tuple: (chain, copy_number)
-                    resolved_paths.append((best_chain, copy_number))
+                    resolved_paths.append(best_chain)
                     used_in_this_qname.update(best_chain_used)
 
                     # Mark these specific records as "consumed" by the stitcher
@@ -278,37 +278,6 @@ class TopologyEngine:
                 cleaned_alignments[contig_id] = intact_batch
 
         return cleaned_alignments, resolved_paths
-
-    def _estimate_copy_number(self, chain: list['AlignmentRecord']) -> int:
-        """
-        Estimate copy number for a stitched IS chain.
-
-        Uses the MEDIAN depth of ONLY the real (non-synthetic) IS-aligned contigs,
-        compared to the global median depth of the genome.
-
-        Args:
-            chain: List of AlignmentRecords forming the stitched path
-
-        Returns:
-            Estimated copy number (int, minimum 1)
-        """
-        # Get depths of REAL fragments (idx != -1 means real alignment)
-        real_fragment_depths = [
-            self.contig_depths.get(frag.t_name, 1.0)
-            for frag in chain
-            if frag.idx != -1  # Only real alignments, not synthetic
-        ]
-
-        if not real_fragment_depths:
-            return 1
-
-        # Use median of the aligned IS fragments
-        is_median_depth = float(np.median(real_fragment_depths))
-
-        # Compare to global genome median
-        copy_number = max(1, round(is_median_depth / self.global_median_depth))
-
-        return copy_number
 
     def _build_stitching_payload(self, h_u: 'AlignmentRecord', h_v: 'AlignmentRecord', path_contigs: list[str]) -> list[
         'AlignmentRecord']:
@@ -406,6 +375,59 @@ class TopologyEngine:
                 ))
 
         return valid_paths
+
+    def _find_collapsed_path(self, start_ctg: str, start_strand: Strand, target_ctg: str,
+                             target_strand: Strand, expected_len: int, tolerance: int) -> list[dict]:
+        """
+        Greedy pathfinder for 'collapse' mode. Always traverses the highest depth neighbor option if finds multiple branchs.
+        """
+        # Stack payload: (current_contig, exit_strand, path_list, accumulated_len, peak_depth)
+        stack = [(start_ctg, start_strand, [start_ctg], 0, 0.0)]
+
+        while stack:
+            curr_ctg, curr_strand, path, dist, max_dp = stack.pop()
+
+            # Base Case: Reached the Sink anchor
+            if curr_ctg == target_ctg:
+                if curr_strand == target_strand:
+                    return [{'contigs': path, 'length': dist, 'min_depth': max_dp}] 
+                continue
+
+            # Prune: We have wandered too far down a dead end
+            if dist > expected_len + tolerance:
+                continue
+
+            # Greedy Graph Traversal: Find the single deepest valid neighbor
+            deepest_neighbor = None
+            highest_depth = -1
+
+            for edge in self._graph.get_neighbors(curr_ctg):
+                if edge.u_strand != curr_strand: continue
+                if edge.v in path: continue # Prevent cyclic infinite loops
+
+                n_dp = self.contig_depths.get(edge.v, 1.0)
+                if n_dp > highest_depth:
+                    highest_depth = n_dp
+                    deepest_neighbor = edge
+
+            if deepest_neighbor:
+                n_ctg = deepest_neighbor.v
+                n_len = self.contig_lengths.get(n_ctg, 0)
+                overlap_len = getattr(deepest_neighbor, 'overlap', 0)
+
+                # Absolute normalization for target anchor
+                added_dist = (n_len - overlap_len) if n_ctg != target_ctg else -overlap_len
+
+                stack.append((
+                    n_ctg,
+                    deepest_neighbor.v_strand,
+                    path + [n_ctg],
+                    dist + added_dist,
+                    max(max_dp, highest_depth) # Track the peak depth of the collapsed hub
+                ))
+
+        # If it reaches a dead end before finding the target anchor
+        return []
 
     def traverse(self, start_node: str, exit_strand: Strand, hops_needed: int) -> list[tuple[str, int, IntervalBatch]]:
         """

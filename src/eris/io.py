@@ -235,16 +235,21 @@ class ReportRow:
     orientation: str
     effect: str
     fractional_depth: float
-    estimated_copies: int
 
     @classmethod
-    def header(cls) -> str:
+    def header(cls, mode: str = 'variant') -> str:
         """Returns the TSV header string dynamically generated from the dataclass fields."""
-        return "\t".join(cls.__annotations__.keys()) + "\n"
+        fields = list(cls.__annotations__.keys())
+
+        # Swap the header text if we are calculating copy numbers
+        if mode == 'collapse' and 'fractional_depth' in fields:
+            fields[fields.index('fractional_depth')] = 'copy_number'
+
+        return "\t".join(fields) + "\n"
 
     def to_tsv(self) -> str:
         """Formats the row data into a tab-separated string."""
-        return f"{self.locus_id}\t{self.target}\t{self.gene_id}\t{self.context}\t{self.dist_bp}\t{self.topo_hops}\t{self.orientation}\t{self.effect}\t{self.fractional_depth}\t{self.estimated_copies}\n"
+        return f"{self.locus_id}\t{self.target}\t{self.gene_id}\t{self.context}\t{self.dist_bp}\t{self.topo_hops}\t{self.orientation}\t{self.effect}\t{self.fractional_depth}\n"
 
 
 class OutputManager:
@@ -259,7 +264,7 @@ class OutputManager:
         >>>     out.write_locus_relations(locus)
     """
 
-    def __init__(self, prefix: Optional[str], write_gff: bool = True, write_faa: bool = True):
+    def __init__(self, prefix: Optional[str], write_gff: bool = True, write_faa: bool = True, write_fna: bool = True, mode: str = 'variant'):
         """
         Initialize the OutputManager.
 
@@ -267,10 +272,13 @@ class OutputManager:
             prefix: Filename prefix for all output files. If None, TSV is sent to stdout.
             write_gff: Whether to output an assembly-wide GFF3 file.
             write_faa: Whether to output an assembly-wide protein FASTA file.
+            mode: Pipeline mode ('variant' or 'collapse') to determine TSV headers.
         """
         self.prefix = prefix
         self.write_gff = write_gff
+        self.write_fna = write_fna
         self.write_faa = write_faa
+        self.mode = mode
         self._stack = ExitStack()
 
     def __enter__(self):
@@ -281,17 +289,21 @@ class OutputManager:
             self.tsv_handle = stdout
 
         # Write TSV Header dynamically from the dataclass
-        self.tsv_handle.write(ReportRow.header())
+        self.tsv_handle.write(ReportRow.header(self.mode))
 
         # 2. Setup Optional PyFGS Writers
         self.gff_writer = None
         self.faa_writer = None
+        self.fna_writer = None
 
         if self.prefix and self.write_gff:
             self.gff_writer = self._stack.enter_context(Gff3Writer(f"{self.prefix}_assembly.gff"))
 
         if self.prefix and self.write_faa:
             self.faa_writer = self._stack.enter_context(FaaWriter(f"{self.prefix}_proteins.faa"))
+
+        if self.prefix and self.write_fna:
+            self.fna_writer = self._stack.enter_context(FnaWriter(f"{self.prefix}_cds.fna"))
 
         # 3. Setup Locus FASTA writer
         self.locus_fasta = None
@@ -313,7 +325,6 @@ class OutputManager:
     def _write_tsv_row(self, locus: 'Locus', relation: 'FeatureRelation'):
         """Constructs a ReportRow dataclass and writes it to the TSV handle."""
 
-        copies = getattr(locus, 'estimated_copies', 1)
         row = ReportRow(
             locus_id=locus.id,
             target=",".join(t.id for t in locus.targets),
@@ -324,7 +335,6 @@ class OutputManager:
             orientation=relation.orientation.value,
             effect=relation.effect.name,
             fractional_depth=locus.fractional_depth,
-            estimated_copies=copies
         )
         self.tsv_handle.write(row.to_tsv())
 
@@ -334,6 +344,8 @@ class OutputManager:
             self.gff_writer.write_record(genes, contig_id, sequence)
         if self.faa_writer:
             self.faa_writer.write_record(genes, contig_id)
+        if self.fna_writer:
+            self.fna_writer.write_record(genes, contig_id)
 
     def write_locus_fasta(self, locus_id: str, sequence: str):
         """Writes a single locus nucleotide sequence to the loci FASTA file."""
