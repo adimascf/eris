@@ -319,8 +319,25 @@ class OutputManager:
 
     def write_locus_relations(self, locus: 'Locus'):
         """Writes all contextual relationships (passengers, flanks) for a locus to the TSV report."""
-        for relation in locus.passengers + locus.upstream_flanks + locus.downstream_flanks:
-            self._write_tsv_row(locus, relation)
+
+        relations = locus.passengers + locus.upstream_flanks + locus.downstream_flanks
+        # If there are no flanking genes, log the isolated IS anyway
+        if not relations:
+            row = ReportRow(
+                locus_id=locus.id,
+                target=",".join(t.id for t in locus.targets),
+                gene_id="None",
+                context="NONE",   # Flag it as having no local context
+                dist_bp=-1,
+                topo_hops=0,
+                orientation="-",
+                effect="NONE",
+                fractional_depth=locus.fractional_depth,
+            )
+            self.tsv_handle.write(row.to_tsv())
+        else:
+            for relation in relations:
+                self._write_tsv_row(locus, relation)
 
     def _write_tsv_row(self, locus: 'Locus', relation: 'FeatureRelation'):
         """Constructs a ReportRow dataclass and writes it to the TSV handle."""
