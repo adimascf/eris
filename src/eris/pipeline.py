@@ -324,10 +324,17 @@ class LocusBuilder:
                                [LocationSegment(contig, t.t_start, t.t_end, Strand(t.strand))])
                 for t in targets
             ]
-
+            
+            # copy number estimation
+            if getattr(self.topology_engine, 'mode', 'variant') == 'collapse':
+                contig_depth = self.genome.contig_depths.get(contig, 1.0)
+                metric_val = float(max(1, round(contig_depth / self.topology_engine.median_depth)))
+            else:
+                metric_val = 1.0
             locus = Locus(
                 id=f"locus_{uuid4().hex[:8]}", contig=contig, start=macro.start, end=macro.end,
-                targets=target_features, passengers=[], upstream_flanks=[], downstream_flanks=[]
+                targets=target_features, passengers=[], upstream_flanks=[], downstream_flanks=[],
+                fractional_depth=metric_val
             )
 
             # Determine macro target context bounds
