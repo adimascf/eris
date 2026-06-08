@@ -57,6 +57,8 @@ def main():
                         help='Maximum number of worker threads for alignment and CDS prediction')
     pipeline_args.add_argument('-m', '--mode', choices=['varaint', 'collapse'], default='variant',
                         help='Resolution mode: "variant" for all possible structural path, "collapse" for a consensus')
+    pipeline_args.add_argument('-c', '--min-coverage', type=float, default=0.30, metavar='',
+                        help='Minimum coverage fraction (0.0 to 1.0 required to report a locus target)')
 
     targets = parser.add_argument_group('🎯', 'Target arguments')
     targets.add_argument('-f', '--feature-type', choices=[e.value for e in FeatureType], metavar='', 
@@ -91,7 +93,7 @@ def main():
     from eris.pipeline import Pipeline
 
     # Hook up the OutputManager parameters explicitly
-    with (Pipeline(target_db, args.hops, args.tolerance, args.max_workers, mode=args.mode) as pipeline,
+    with (Pipeline(target_db, args.hops, args.tolerance, args.max_workers, mode=args.mode, min_coverage=args.min_coverage) as pipeline,
           OutputManager(args.outprefix, write_gff=not args.no_gff, write_faa=not args.no_faa, write_fna=not args.no_fna, mode=args.mode) as out):
 
         log.msg("⌛️ Running topological traversal...\n", flush=True)

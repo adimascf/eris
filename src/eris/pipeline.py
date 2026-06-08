@@ -193,17 +193,6 @@ class LocusBuilder:
         Stitches graph-spanning alignments and processes local alignments
         to produce a sequence of Locus objects.
         """
-        # # Now expects a list of paths (lists of AlignmentRecords) instead of pairs
-        # cleaned_alignments, resolved_paths = self.topology_engine.resolve_split_alignments(alignments)
-
-        # # Iterate over paths of arbitrary length
-        # for path in resolved_paths:
-        #     yield self._stitch(path)
-
-        # for contig_id, batch in cleaned_alignments.items():
-        #     contig_gene_intervals = self.topology_engine.features.get(contig_id, IntervalBatch.empty())
-        #     for locus in self._build_local(contig_id, batch, contig_gene_intervals):
-        #         yield locus
 
         # Now expects a list of paths (lists of AlignmentRecords) instead of pairs
         cleaned_alignments, resolved_paths = self.topology_engine.resolve_split_alignments(alignments)
@@ -217,7 +206,6 @@ class LocusBuilder:
 
         # Filter and yield LOCAL (unstitched) alignments
         for contig_id, batch in cleaned_alignments.items():
-            # Vectorized coverage filter for the remaining unstitched hits
             cov_mask = ((batch.q_ends - batch.q_starts) / batch.q_lengths) >= min_coverage
             intact_batch = batch.filter(cov_mask)
 
@@ -324,7 +312,7 @@ class LocusBuilder:
                                [LocationSegment(contig, t.t_start, t.t_end, Strand(t.strand))])
                 for t in targets
             ]
-            
+
             # copy number estimation
             if getattr(self.topology_engine, 'mode', 'variant') == 'collapse':
                 contig_depth = self.genome.contig_depths.get(contig, 1.0)
@@ -437,11 +425,11 @@ class Pipeline:
     gene calling, graph building, and locus assembly. Uses a thread pool
     for parallel contig processing.
     """
-    __slots__ = ('target_db', '_gene_finder', 'max_feature_hops', 'locus_tolerance', '_executor', 'mode')
+    __slots__ = ('target_db', '_gene_finder', 'max_feature_hops', 'locus_tolerance', '_executor', 'mode', 'min_coverage')
     _THREAD_LOCAL = thread_local()
 
     def __init__(self, target_db: 'TargetDatabase', max_feature_hops: int = 3, locus_tolerance: int = 0,
-                 max_workers: Optional[int] = None, mode: str = 'variant'):
+                 max_workers: Optional[int] = None, mode: str = 'variant', min_coverage: float = 0.30):
         """
         Initialize the Pipeline.
 
@@ -455,6 +443,7 @@ class Pipeline:
         self.max_feature_hops = max_feature_hops
         self.locus_tolerance = locus_tolerance
         self.mode = mode
+        self.min_coverage = min_coverage
         self._gene_finder = GeneFinder(model=Model.Complete, whole_genome=False)
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
 
@@ -541,4 +530,4 @@ class Pipeline:
             genes=gene_cds
         )
 
-        yield from builder.assemble(alignments)
+        yield from builder.assemble(alignments, min_coverage=self.min_coverage)
