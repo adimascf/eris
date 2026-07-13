@@ -402,7 +402,8 @@ class TopologyEngine:
         Greedy pathfinder for 'collapse' mode. Always traverses the highest depth neighbor option if finds multiple branchs.
         """
         # Stack payload: (current_contig, exit_strand, path_list, accumulated_len, peak_depth)
-        stack = [(start_ctg, start_strand, [start_ctg], 0, 0.0)]
+        start_dp = float(self.contig_depths.get(start_ctg, 1.0))
+        stack = [(start_ctg, start_strand, [start_ctg], 0, start_dp)]
 
         while stack:
             curr_ctg, curr_strand, path, dist, max_dp = stack.pop()

@@ -298,13 +298,17 @@ class LocusBuilder:
         'Locus']:
         """Identifies loci within a single contig."""
         loci = []
-        aln_intervals = alignment_batch.to_intervals()
+        aln_intervals = alignment_batch.to_intervals().sort()
         macro_intervals = aln_intervals.merge(tolerance=self.locus_tolerance)
 
         for i in range(len(macro_intervals)):
             macro = macro_intervals[i]
             target_indices = aln_intervals.query(macro.start, macro.end)
-            if not (targets := [alignment_batch.get_record(idx) for idx in target_indices]):
+
+            # Map the sorted spatial indices back to the original alignment batch
+            orig_indices = aln_intervals.original_indices[target_indices]
+
+            if not (targets := [alignment_batch.get_record(idx) for idx in orig_indices]):
                 continue
 
             target_features = [
