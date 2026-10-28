@@ -75,6 +75,10 @@ def main():
     pipeline_args.add_argument('--min-identity', type=fraction, default=0.0, metavar='',
                         help='Minimum target identity (0.0 to 1.0; matching bases over aligned bases, gaps counted) '
                              'required to report a locus target. Stitched loci are pooled over their fragments')
+    pipeline_args.add_argument('--merge-synonyms', nargs='?', const=True, default=None, metavar='IS.csv',
+                        help='Rename IS targets that ISfinder lists as synonyms/isoforms (e.g. IS1A/IS1B, IS30/IS30D) '
+                             'to the first name found in the genome, so they can be stitched and counted together. '
+                             'Downloads and caches ISfinder\'s IS.csv, or give a local IS.csv path')
 
     targets = parser.add_argument_group('🎯', 'Target arguments')
     targets.add_argument('-f', '--feature-type', choices=[e.value for e in FeatureType], metavar='',
@@ -101,6 +105,17 @@ def main():
     target_db = TargetDatabase(args.targets, FeatureType(args.feature_type), args.indexing_threads)
     log.msg("✅ Targets loaded!\n")
 
+    synonyms = None
+    if args.merge_synonyms:
+        from eris.synonyms import SynonymResolver, fetch_isfinder_table
+        if args.merge_synonyms is True:
+            log.msg("📥 Fetching ISfinder synonym table...\n", flush=True)
+            table = fetch_isfinder_table()
+        else:
+            table = Path(args.merge_synonyms)
+        synonyms = SynonymResolver(table)
+        log.msg(f"✅ Synonym table loaded: {table}\n")
+
     log.msg("🧬 Loading genome...\n", flush=True)
     genome = GenomeAssembly.from_file(args.genome)
     log.msg("✅ Genome loaded!\n")
@@ -110,7 +125,7 @@ def main():
 
     # Hook up the OutputManager parameters explicitly
     with (Pipeline(target_db, args.hops, args.tolerance, args.max_workers, mode=args.mode,
-                   min_coverage=args.min_coverage, min_identity=args.min_identity) as pipeline,
+                   min_coverage=args.min_coverage, min_identity=args.min_identity, synonyms=synonyms) as pipeline,
           OutputManager(args.outprefix, write_gff=not args.no_gff, write_faa=not args.no_faa, write_fna=not args.no_fna, mode=args.mode) as out):
 
         log.msg("⌛️ Running topological traversal...\n", flush=True)

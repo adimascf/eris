@@ -18,6 +18,7 @@ from eris.graph import TopologyEngine
 from eris.alignment import AlignmentBatch, AlignmentRecord, pooled_identity
 from eris.interval import IntervalBatch, Context, Strand, Interval
 from eris.constants import FeatureType, Orientation, Effect
+from eris.synonyms import SynonymResolver
 
 
 # DataClasses ----------------------------------------------------------------------------------------------------------
@@ -443,12 +444,12 @@ class Pipeline:
     for parallel contig processing.
     """
     __slots__ = ('target_db', '_gene_finder', 'max_feature_hops', 'locus_tolerance', '_executor', 'mode', 'min_coverage',
-                 'min_identity')
+                 'min_identity', 'synonyms')
     _THREAD_LOCAL = thread_local()
 
     def __init__(self, target_db: 'TargetDatabase', max_feature_hops: int = 3, locus_tolerance: int = 0,
                  max_workers: Optional[int] = None, mode: str = 'variant', min_coverage: float = 0.30,
-                 min_identity: float = 0.0):
+                 min_identity: float = 0.0, synonyms: Optional[SynonymResolver] = None):
         """
         Initialize the Pipeline.
 
@@ -460,6 +461,8 @@ class Pipeline:
             mode: Resolution mode, 'variant' or 'collapse'.
             min_coverage: Minimum target coverage for a locus target to be reported.
             min_identity: Minimum target identity for a locus target to be reported.
+            synonyms: If given, synonymous IS targets are renamed to the first-seen name of their group before locus
+                building, so e.g. IS1A and IS1B hits of one insertion can be stitched together.
         """
         self.target_db = target_db
         self.max_feature_hops = max_feature_hops
@@ -467,6 +470,7 @@ class Pipeline:
         self.mode = mode
         self.min_coverage = min_coverage
         self.min_identity = min_identity
+        self.synonyms = synonyms
         self._gene_finder = GeneFinder(model=Model.Complete, whole_genome=False)
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
 
@@ -523,7 +527,7 @@ class Pipeline:
                 if out:
                     out.write_global_genes(contig_id, bytes(genome[contig_id]), genes)
             if a_batch:
-                alignments[contig_id] = a_batch
+                alignments[contig_id] = self.synonyms.rename(a_batch) if self.synonyms else a_batch
 
         # for batch in alignments.values():
         #     for n, _ in enumerate(batch.q_names):
