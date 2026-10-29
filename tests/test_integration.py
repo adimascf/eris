@@ -58,7 +58,9 @@ def count_copies(truth_file: Path, eris_loci: list, families: dict[str, str] | N
     relatives (e.g. IS600 called where the truth has ISSd1, both IS3) are not scored as errors.
 
     `count` sets how an IS's loci become a copy count: 'max' takes max(#loci, max copy number), which
-    forgives a locus reported twice; 'sum' adds up every locus's copy number, as a user summing the report would.
+    forgives a locus reported twice; 'sum' adds up every locus's copy number, as a user summing the report would;
+    'hub' is 'sum' with each repeat hub counted once per IS family, since until #14 is fixed several near-identical
+    names report the same hub, each with the hub's copy number. 'hub' needs `families`.
     """
     # Parse Ground Truth
     gt_counts = {}
@@ -75,7 +77,8 @@ def count_copies(truth_file: Path, eris_loci: list, families: dict[str, str] | N
     eris_loci_dict = {}
     eris_depth = {}
     eris_sum = {}
-    
+    counted_hubs = set()
+
     for locus in eris_loci:
         if not locus.targets: continue
         
@@ -90,13 +93,17 @@ def count_copies(truth_file: Path, eris_loci: list, families: dict[str, str] | N
 
             # Track the max copy number depth estimate seen for this IS
             eris_depth[is_name] = max(eris_depth.get(is_name, 0), int(locus.fractional_depth))
+            if count == 'hub' and (hub := locus.copy_number.hub):
+                if (families.get(is_name, is_name), hub) in counted_hubs:
+                    continue
+                counted_hubs.add((families.get(is_name, is_name), hub))
             eris_sum[is_name] = eris_sum.get(is_name, 0) + int(locus.fractional_depth)
 
     # Resolve Final Copy Counts for Eris
     eris_counts = {}
     for is_name in eris_loci_dict:
         # Eris copy count = max of the depth estimate OR the distinct physical loci anchored
-        eris_counts[is_name] = max(len(eris_loci_dict[is_name]), eris_depth[is_name]) if count == 'max' else eris_sum[is_name]
+        eris_counts[is_name] = max(len(eris_loci_dict[is_name]), eris_depth[is_name]) if count == 'max' else eris_sum.get(is_name, 0)
 
     # Sum the per-name counts within each family, after the per-name copy estimate above
     if families:
@@ -186,7 +193,7 @@ def test_benchmark_precision_recall(benchmark, families):
     print("family sum P=%.3f R=%.3f F1=%.3f" % (precision, recall, f1))
 
     # Score summed copy numbers: the max-based count cannot see an IS reported twice
-    assert f1 >= 0.85, f"Family F1 on summed copy numbers must be >= 0.85, got {f1:.2f}"
+    assert f1 >= 0.94, f"Family F1 on summed copy numbers must be >= 0.94, got {f1:.3f}"
 
 
 @needs_data
@@ -209,6 +216,40 @@ def test_benchmark_family_copy_counts_do_not_regress(benchmark, families):
 def test_benchmark_reports_each_copy_once(benchmark, families):
     _, _, loci = benchmark
     assert find_overlapping_claims(loci, families) == []
+
+
+# The real-read assembly collapses repeats that the simulated one keeps apart, including copies on the plasmids
+REAL_READS = ("contigs_shovill_realfastq.gfa", "complete_ec958_IS.reanotated.sorted.bed")
+needs_real_reads = pytest.mark.skipif(not (DATA_DIR / REAL_READS[0]).exists(),
+                                      reason=f"real-read assembly not found in {DATA_DIR}/")
+
+
+@pytest.fixture(scope="module")
+def real_reads(target_db):
+    with Pipeline(target_db, max_feature_hops=0, mode='collapse', min_coverage=0.30) as pipeline:
+        return list(pipeline(GenomeAssembly.from_file(DATA_DIR / REAL_READS[0])))
+
+
+@needs_data
+@needs_real_reads
+def test_real_reads_count_each_replicon_once(real_reads, families):
+    precision, recall, f1 = compute_metrics(DATA_DIR / REAL_READS[1], real_reads, families, count='hub')
+    print("family hub P=%.3f R=%.3f F1=%.3f" % (precision, recall, f1))
+    assert f1 >= 0.95, f"Family F1 with each hub counted once must be >= 0.95, got {f1:.3f}"
+
+
+@needs_data
+@needs_real_reads
+def test_real_read_hubs_split_their_copies_by_depth_tier(real_reads):
+    # Copies per depth tier, chromosome first, from the complete EC958 genome's annotation
+    expected = {"IS1R": [3, 2], "ISEc23": [3, 1], "ISEc9": [1, 1], "ISEc12": [4]}
+    found = {}
+    for locus in real_reads:
+        for target in locus.targets:
+            name = target.id.split('_')[0]
+            if name in expected and locus.copy_number.hub:
+                found.setdefault(name, set()).add(tuple(n for n, _ in locus.copy_number.tiers))
+    assert found == {name: {tuple(tiers)} for name, tiers in expected.items()}
 
 
 def test_compute_metrics_family_level_merges_cross_mapping_relatives(tmp_path):

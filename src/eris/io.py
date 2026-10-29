@@ -23,6 +23,7 @@ from eris.alignment import Cigar
 from eris.graph import Edge
 from eris.interval import Strand
 from eris.constants import FeatureType
+from eris.copy_number import CopyNumber, UNIQUE
 
 
 # Base classes ---------------------------------------------------------------------------------------------------------
@@ -235,6 +236,9 @@ class ReportRow:
         orientation: Strand orientation of the gene relative to the target (same or opposite).
         effect: Biological impact of the insertion on the gene (e.g., TRUNCATED, NONE).
         fractional_depth: The relative read depth of the variant path compared to the source contig, indicating sub-clonal abundance.
+            In collapse mode the column is copy_number instead, followed by copy_number_min, copy_number_max,
+            copy_tiers (copies@mean anchor depth per depth tier) and copy_fallback, all taken from `copies`.
+        copies: The locus's copy number in collapse mode; None in variant mode.
     """
     locus_id: str
     target: str
@@ -247,21 +251,27 @@ class ReportRow:
     orientation: str
     effect: str
     fractional_depth: float
+    copies: Optional['CopyNumber'] = None
 
     @classmethod
     def header(cls, mode: str = 'variant') -> str:
         """Returns the TSV header string dynamically generated from the dataclass fields."""
-        fields = list(cls.__annotations__.keys())
+        fields = [f for f in cls.__annotations__ if f != 'copies']
 
         # Swap the header text if we are calculating copy numbers
-        if mode == 'collapse' and 'fractional_depth' in fields:
+        if mode == 'collapse':
             fields[fields.index('fractional_depth')] = 'copy_number'
+            fields += ['copy_number_min', 'copy_number_max', 'copy_tiers', 'copy_fallback']
 
         return "\t".join(fields) + "\n"
 
     def to_tsv(self) -> str:
         """Formats the row data into a tab-separated string."""
-        return f"{self.locus_id}\t{self.target}\t{self.target_identity}\t{self.contig_path}\t{self.gene_id}\t{self.context}\t{self.dist_bp}\t{self.topo_hops}\t{self.orientation}\t{self.effect}\t{self.fractional_depth}\n"
+        row = f"{self.locus_id}\t{self.target}\t{self.target_identity}\t{self.contig_path}\t{self.gene_id}\t{self.context}\t{self.dist_bp}\t{self.topo_hops}\t{self.orientation}\t{self.effect}"
+        if (c := self.copies) is None:
+            return f"{row}\t{self.fractional_depth}\n"
+        tiers = ",".join(f"{n}@{depth:.1f}x" for n, depth in c.tiers)
+        return f"{row}\t{c.estimate}\t{c.low}\t{c.high}\t{tiers}\t{str(c.fallback).lower()}\n"
 
 
 class OutputManager:
@@ -347,6 +357,7 @@ class OutputManager:
                 orientation="-",
                 effect="NONE",
                 fractional_depth=locus.fractional_depth,
+                copies=self._copies(locus),
             )
             self.tsv_handle.write(row.to_tsv())
         else:
@@ -368,8 +379,15 @@ class OutputManager:
             orientation=relation.orientation.value,
             effect=relation.effect.name,
             fractional_depth=locus.fractional_depth,
+            copies=self._copies(locus),
         )
         self.tsv_handle.write(row.to_tsv())
+
+    def _copies(self, locus: 'Locus') -> Optional['CopyNumber']:
+        """The locus's copy number for the report: collapse mode only, one copy if it was never set."""
+        if self.mode != 'collapse':
+            return None
+        return locus.copy_number or UNIQUE
 
     def write_global_genes(self, contig_id: str, sequence: Union[str, bytes], genes: list['Gene']):
         """Writes assembly-wide gene calls to the GFF3 and FAA files."""

@@ -1,13 +1,13 @@
 from types import SimpleNamespace
 
 from eris.constants import Strand
+from eris.copy_number import CopyNumber
 from eris.io import OutputManager, ReportRow, format_contig_path, format_identities
 from eris.pipeline import GenomicFeature, LocationSegment, Locus
 
 
 def test_report_header_puts_target_identity_after_target():
     assert ReportRow.header().split("\t")[:3] == ["locus_id", "target", "target_identity"]
-    assert ReportRow.header(mode='collapse').rstrip("\n").split("\t")[-1] == "copy_number"
 
 
 def test_report_header_puts_contig_path_after_target_identity_in_both_modes():
@@ -46,3 +46,39 @@ def test_report_and_locus_fasta_carry_the_contig_path(tmp_path):
     header, row = (tmp_path / "out_report.tsv").read_text().splitlines()
     assert dict(zip(header.split("\t"), row.split("\t")))["contig_path"] == "ctgA+,ctgB-"
     assert (tmp_path / "out_loci.fasta").read_text() == ">locus_split_1 path=ctgA+,ctgB-\nACGT\n"
+
+
+def _report(tmp_path, locus, mode):
+    with OutputManager(str(tmp_path / "out"), write_gff=False, write_faa=False, write_fna=False, mode=mode) as out:
+        out.write_locus_relations(locus)
+    header, row = (tmp_path / "out_report.tsv").read_text().splitlines()
+    return dict(zip(header.split("\t"), row.split("\t")))
+
+
+def test_collapse_report_gives_the_copy_number_range_and_its_depth_tiers(tmp_path):
+    # IS1 on the real-read EC958 assembly: 3 chromosome copies and 2 pEC958 copies, link count 4
+    locus = _locus("locus_1", ("hub", 0, 768, Strand.FORWARD))
+    locus.copy_number = CopyNumber(5, 4, 5, ((3, 38.04), (2, 77.0)))
+    locus.fractional_depth = 5.0
+
+    row = _report(tmp_path, locus, 'collapse')
+
+    assert {k: row[k] for k in list(row)[-5:]} == {
+        "copy_number": "5", "copy_number_min": "4", "copy_number_max": "5", "copy_tiers": "3@38.0x,2@77.0x",
+        "copy_fallback": "false"}
+
+
+def test_collapse_report_flags_a_copy_number_from_the_genome_baseline(tmp_path):
+    locus = _locus("locus_1", ("hub", 0, 1300, Strand.FORWARD))
+    locus.copy_number = CopyNumber(4, 1, 4, ((4, 38.9),), fallback=True)
+
+    assert _report(tmp_path, locus, 'collapse')["copy_fallback"] == "true"
+
+
+def test_variant_report_keeps_fractional_depth_as_its_last_column(tmp_path):
+    locus = _locus("locus_1", ("ctgA", 0, 768, Strand.FORWARD))
+    locus.fractional_depth = 0.5
+
+    row = _report(tmp_path, locus, 'variant')
+
+    assert list(row)[-1] == "fractional_depth" and row["fractional_depth"] == "0.5"
