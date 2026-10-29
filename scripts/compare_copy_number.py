@@ -53,7 +53,7 @@ ESTIMATORS = ("old", "link", "anchor", "low", "high")
 
 MIN_ANCHOR_LENGTH = 1000  # bp; a shorter contig next to a hub is a stub that the walk crosses
 STUB_BUDGET = 500  # bp of stubs a walk may cross before it gives up (ISEc12's flanks break into 200-400 bp stubs)
-TIER_TOLERANCE = 1.4  # largest depth ratio between neighbouring anchors in one depth tier
+TIER_TOLERANCE = 1.5  # largest depth ratio between neighbouring anchors in one depth tier
 END_SLOP = 10  # bp a target alignment may stop short of a contig's ends, beyond the link overlap, and still cover it
 
 
