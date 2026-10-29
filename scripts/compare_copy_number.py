@@ -84,7 +84,7 @@ def hub_contigs(segments: list[tuple[str, int, int, Strand]], lengths: dict[str,
     return list(hub.items())
 
 
-class Exit(NamedTuple):
+class WalkEnd(NamedTuple):
     """Where one walk out of a repeat hub ends: an anchor, a repeat (another target's hub), a dead end or a tip."""
     contig: str
     strand: Strand
@@ -96,8 +96,8 @@ def link_graph(edges: list[Edge]) -> Graph:
     return Graph(edges + [e.complement() for e in edges])
 
 
-def find_exits(graph: Graph, hub: list[tuple[str, Strand]], lengths: dict[str, int], repeats: set[str],
-               min_anchor: int = MIN_ANCHOR_LENGTH, stub_budget: int = STUB_BUDGET) -> dict[str, list[Exit]]:
+def walk_out(graph: Graph, hub: list[tuple[str, Strand]], lengths: dict[str, int], repeats: set[str],
+             min_anchor: int = MIN_ANCHOR_LENGTH, stub_budget: int = STUB_BUDGET) -> dict[str, list[WalkEnd]]:
     """
     Walks out of a repeat hub on each side, following edge orientation so a walk never turns back towards the hub's
     side of a contig (an undirected walk out of the IS26 hub reaches the rRNA repeat). `hub` holds each hub contig
@@ -105,17 +105,17 @@ def find_exits(graph: Graph, hub: list[tuple[str, Strand]], lengths: dict[str, i
     at a contig in `repeats`, or when the stubs it crossed exceed `stub_budget`. Each distinct oriented end is one
     link, so an anchor between two inverted copies counts twice.
     """
-    hub_contigs = {contig for contig, _ in hub}
-    exits = {}
+    in_hub = {contig for contig, _ in hub}
+    ends = {}
     for side, sign in (("upstream", -1), ("downstream", 1)):
-        found: dict[tuple[str, Strand], Exit] = {}
+        found: dict[tuple[str, Strand], WalkEnd] = {}
         stack = [(edge, 0) for contig, strand in hub for edge in graph.get_neighbors(contig)
                  if edge.u_strand == strand * sign]
         seen = set()
         while stack:
             edge, used = stack.pop()
             node = (edge.v, edge.v_strand)
-            if node in seen or edge.v in hub_contigs:
+            if node in seen or edge.v in in_hub:
                 continue
             seen.add(node)
             used += lengths[edge.v] - edge.overlap
@@ -131,9 +131,9 @@ def find_exits(graph: Graph, hub: list[tuple[str, Strand]], lengths: dict[str, i
             else:
                 stack.extend((e, used) for e in onward)
                 continue
-            found.setdefault(node, Exit(edge.v, edge.v_strand, kind))
-        exits[side] = list(found.values())
-    return exits
+            found.setdefault(node, WalkEnd(edge.v, edge.v_strand, kind))
+        ends[side] = list(found.values())
+    return ends
 
 
 class Estimates(NamedTuple):
@@ -150,27 +150,27 @@ def round_half_up(x: float) -> int:
     return math.floor(x + 0.5)
 
 
-def estimate(hub_depth: float, exits: dict[str, list[Exit]], depths: dict[str, float], baseline: float,
+def estimate(hub_depth: float, ends: dict[str, list[WalkEnd]], depths: dict[str, float], baseline: float,
              tolerance: float = TIER_TOLERANCE) -> Estimates:
     """
-    Estimates a repeat hub's copy number from the exits on its two sides.
+    Estimates a repeat hub's copy number from where the walks out of its two sides end.
 
-    link: the links to anchors and repeats, averaged over the two sides. anchor: the hub depth shared out over the depth
-    tiers of its anchors, each tier's share of the copies set by its share of the links, so with one tier it is hub
-    depth over mean anchor depth. With no anchors, hub depth over `baseline`, flagged as a fallback.
+    link: the links to anchors, averaged over the two sides. anchor: the hub depth shared out over the depth tiers of
+    its anchors, each tier weighted by the anchors it has on its better-linked side, so with one tier it is hub depth
+    over mean anchor depth, and a tier whose anchor one side misses still gets its copy. With no anchors, hub depth
+    over `baseline`, flagged as a fallback.
     """
-    links = [e for side in exits.values() for e in side if e.kind in ("anchor", "repeat")]
-    link = max(1, round_half_up(len(links) / 2))
-    anchor_depths = [depths[e.contig] for e in links if e.kind == "anchor"]
-    if not anchor_depths:
+    anchors = {side: [depths[e.contig] for e in side_ends if e.kind == "anchor"] for side, side_ends in ends.items()}
+    link = max(1, round_half_up(sum(len(a) for a in anchors.values()) / 2))
+    if not any(anchors.values()):
         anchor = max(1, round_half_up(hub_depth / baseline))
         return Estimates(link, anchor, min(link, anchor), max(link, anchor), [(anchor, baseline)], True)
 
-    tiers = depth_tiers(anchor_depths, tolerance)
-    # Copies per side in each tier, scaled so the tiers' summed depth equals the hub's
-    per_side = [(len(t) / 2, sum(t) / len(t)) for t in tiers]
+    tiers = depth_tiers([d for side in anchors.values() for d in side], tolerance)
+    # Anchors per tier on the side that reached more of them, scaled so the tiers' summed depth equals the hub's
+    per_side = [(max(sum(d in t for d in side) for side in anchors.values()), sum(t) / len(t)) for t in tiers]
     scale = hub_depth / sum(n * depth for n, depth in per_side)
-    tier_copies = [(round_half_up(n * scale), depth) for n, depth in per_side]
+    tier_copies = [(max(1, round_half_up(n * scale)), depth) for n, depth in per_side]
     anchor = max(1, sum(copies for copies, _ in tier_copies))
     return Estimates(link, anchor, min(link, anchor), max(link, anchor), tier_copies, False)
 
@@ -192,7 +192,13 @@ class HubGroup:
     locus_ids: list[str]
     hub: list[tuple[str, Strand]]
     old: float
-    estimates: Estimates | None = field(default=None, compare=False)
+    hub_depth: float = 0.0
+    ends: dict[str, list[WalkEnd]] = field(default_factory=dict)
+    estimates: Estimates | None = None
+
+    @property
+    def contigs(self) -> set[str]:
+        return {contig for contig, _ in self.hub}
 
 
 def group_by_hub(loci: list[LocusHub]) -> list[HubGroup]:
@@ -200,13 +206,13 @@ def group_by_hub(loci: list[LocusHub]) -> list[HubGroup]:
     groups: list[HubGroup] = []
     for locus in loci:
         contigs = {contig for contig, _ in locus.hub}
-        group = next((g for g in groups if g.family == locus.family and contigs & {c for c, _ in g.hub}), None)
+        group = next((g for g in groups if g.family == locus.family and contigs & g.contigs), None)
         if group is None:
             groups.append(HubGroup(locus.family, {locus.name}, [locus.locus_id], list(locus.hub), locus.old))
             continue
         group.names.add(locus.name)
         group.locus_ids.append(locus.locus_id)
-        group.hub += [(c, s) for c, s in locus.hub if c not in {h for h, _ in group.hub}]
+        group.hub += [(c, s) for c, s in locus.hub if c not in group.contigs]
         group.old = max(group.old, locus.old)
     return groups
 
@@ -218,14 +224,17 @@ def baseline_depth(genome: GenomeAssembly, repeats: set[str], min_length: int = 
     return float(sum(genome.contig_depths[c] * genome.contig_lengths[c] for c in contigs) / total)
 
 
-def family_scores(truth: Counter[str], eris: Counter[str]) -> tuple[float, float, float, dict[str, tuple[int, int]]]:
-    """Copy-aware precision, recall and F1 over families, as `compute_metrics`, and the families that are wrong."""
-    families = sorted(set(truth) | set(eris))
-    tp = sum(min(truth[f], eris[f]) for f in families)
-    precision = tp / sum(eris.values())
+def family_scores(truth: Counter[str], called: Counter[str]) -> tuple[float, float, float, dict[str, tuple[int, int]]]:
+    """
+    Copy-aware precision, recall and F1 over families, as `compute_metrics`, and the families that are wrong. It takes
+    counts rather than loci, so a hub shared by several loci can be scored once.
+    """
+    families = sorted(set(truth) | set(called))
+    tp = sum(min(truth[f], called[f]) for f in families)
+    precision = tp / sum(called.values())
     recall = tp / sum(truth.values())
     f1 = 2 * precision * recall / (precision + recall)
-    return precision, recall, f1, {f: (truth[f], eris[f]) for f in families if truth[f] != eris[f]}
+    return precision, recall, f1, {f: (truth[f], called[f]) for f in families if truth[f] != called[f]}
 
 
 def group_copies(group: HubGroup, estimator: str) -> int:
@@ -234,27 +243,44 @@ def group_copies(group: HubGroup, estimator: str) -> int:
     return getattr(group.estimates, estimator) if group.estimates else 1
 
 
-def disagreement_reason(est: Estimates, exits: dict[str, list[Exit]], hub_depth: float,
-                        depths: dict[str, float]) -> str:
-    """What the walks out of a hub found on each side, for a hub where link count and anchor depth disagree."""
-    parts = []
-    for side, side_exits in exits.items():
-        kinds = Counter(e.kind for e in side_exits)
-        summed = sum(depths[e.contig] for e in side_exits if e.kind == "anchor")
-        doubled = sum(n - 1 for n in Counter(e.contig for e in side_exits if e.kind == "anchor").values())
-        note = ", ".join(f"{n} {k}" for k, n in sorted(kinds.items()))
-        note += f"; hub/anchors {hub_depth:.0f}/{summed:.0f}" if summed else ""
-        note += f"; {doubled} anchor(s) reached twice" if doubled else ""
-        parts.append(f"{side}: {note}")
-    return " | ".join(parts)
+def anchor_contigs(group: HubGroup) -> set[str]:
+    return {e.contig for side in group.ends.values() for e in side if e.kind == "anchor"}
 
 
-def tier_check(groups: list[HubGroup], group_exits: list[dict], depths: dict[str, float],
-               replicon_of: dict[str, str]) -> None:
+def disagreement_reason(group: HubGroup, depths: dict[str, float]) -> str:
+    """Why link count and anchor depth disagree on a hub, read from where the walks out of each side ended."""
+    est = group.estimates
+    assert est is not None
+    counts = {side: Counter(e.kind for e in ends) for side, ends in group.ends.items()}
+    summed = {side: sum(depths[e.contig] for e in ends if e.kind == "anchor") for side, ends in group.ends.items()}
+    reasons = []
+    if counts["upstream"]["anchor"] != counts["downstream"]["anchor"]:
+        reasons.append(f"the sides reach {counts['upstream']['anchor']} and {counts['downstream']['anchor']} "
+                       f"anchors")
+    for side, kinds in counts.items():
+        if kinds["dead_end"] or kinds["tip"]:
+            reasons.append(f"{kinds['dead_end'] + kinds['tip']} {side} walk(s) end in stubs before an anchor "
+                           f"(links lost)")
+        if kinds["repeat"]:
+            reasons.append(f"{kinds['repeat']} {side} walk(s) run into another target's hub (not counted)")
+    over = [side for side, s in summed.items() if s > group.hub_depth * 1.15]
+    under = [side for side, s in summed.items() if s < group.hub_depth / 1.15]
+    if over:
+        reasons.append(f"{'/'.join(over)} anchors sum past the hub depth (extra links)")
+    if under:
+        reasons.append(f"{'/'.join(under)} anchors sum short of the hub depth (missing links)")
+    if est.link < est.anchor and not under:
+        reasons.append("hub depth over anchor depth rounds up (the hub reads deeper than its copies)")
+    depth_sums = ", ".join(f"{side} {s:.0f}" for side, s in summed.items())
+    reasons[0] = reasons[0][0].upper() + reasons[0][1:]
+    return "; ".join(reasons) + f". Hub {group.hub_depth:.0f}x, summed anchors {depth_sums}."
+
+
+def tier_check(groups: list[HubGroup], depths: dict[str, float], replicon_of: dict[str, str]) -> None:
     """At each tolerance, counts the hubs whose depth tiers put each replicon's anchors in a tier of their own."""
     hubs = []
-    for exits in group_exits:
-        anchors = {e.contig for side in exits.values() for e in side if e.kind == "anchor" and e.contig in replicon_of}
+    for group in groups:
+        anchors = {c for c in anchor_contigs(group) if c in replicon_of}
         if len(anchors) >= 2:
             hubs.append(anchors)
     print(f"\nDepth tiers against replicons ({len(hubs)} hubs with 2+ anchors that map to one replicon; "
@@ -292,62 +318,60 @@ def compare(label: str, genome: GenomeAssembly, truth_file: Path, db: TargetData
         for target in locus.targets:
             name = target.id.split(",")[0].split("_")[0]
             segments = [(s.contig, s.start, s.end, s.strand) for s in target.segments]
-            targets.append((locus, LocusHub(locus.id, families.get(name, name), name,
+            targets.append((locus, target, LocusHub(locus.id, families.get(name, name), name,
                                             hub_contigs(segments, lengths, overlap), locus.fractional_depth)))
-    repeats = {contig for _, t in targets for contig, _ in t.hub}
+    repeats = {contig for _, _, hub in targets for contig, _ in hub.hub}
     baseline = baseline_depth(genome, repeats)
     graph = link_graph(list(genome.edges))
 
-    groups = group_by_hub([t for _, t in targets])
-    group_exits = []
+    groups = group_by_hub([hub for _, _, hub in targets])
     for group in groups:
-        exits = find_exits(graph, group.hub, lengths, repeats - {c for c, _ in group.hub}) if group.hub else {}
-        group_exits.append(exits)
         if group.hub:
-            hub_depth = max(depths[c] for c, _ in group.hub)
-            group.estimates = estimate(hub_depth, exits, depths, baseline)
+            group.ends = walk_out(graph, group.hub, lengths, repeats - group.contigs)
+            group.hub_depth = max(depths[c] for c in group.contigs)
+            group.estimates = estimate(group.hub_depth, group.ends, depths, baseline)
 
     print(f"\n=== {label}: {genome.id}, truth {truth_file.name}; {len(loci)} loci, {len(groups)} scoring groups "
           f"(hubs or loci in unique sequence); baseline (contigs >= {MIN_ANCHOR_LENGTH} bp, not hubs) {baseline:.1f}x ===")
     print(f"{'family':<12}{'target':<10}{'kind':<9}{'old':>4}{'link':>5}{'anchor':>7}  combined   tiers (copies@depth)")
-    group_of = {lid: g for g in groups for lid in g.locus_ids}
-    for locus, t in sorted(targets, key=lambda x: (x[1].family, x[1].name)):
-        g = group_of[locus.id]
-        kind = "stitched" if len(locus.targets[0].segments) > 1 else "local"
-        e = g.estimates
-        if e is None:
-            print(f"{t.family:<12}{t.name:<10}{kind:<9}{t.old:>4.0f}{1:>5}{1:>7}  1          unique sequence")
+    # A locus can hold targets of several families, each in its own group
+    group_of = {(lid, g.family): g for g in groups for lid in g.locus_ids}
+    for locus, target, hub in sorted(targets, key=lambda x: (x[2].family, x[2].name)):
+        est = group_of[(locus.id, hub.family)].estimates
+        kind = "stitched" if len(target.segments) > 1 else "local"
+        row = f"{hub.family:<12}{hub.name:<10}{kind:<9}{hub.old:>4.0f}"
+        if est is None:
+            print(f"{row}{1:>5}{1:>7}  1          unique sequence")
             continue
-        combined = f"{e.anchor}" + (f" [{e.low}-{e.high}]" if e.low != e.high else "")
-        tiers = " + ".join(f"{c}@{d:.0f}" for c, d in e.tiers) + (" FALLBACK" if e.fallback else "")
-        print(f"{t.family:<12}{t.name:<10}{kind:<9}{t.old:>4.0f}{e.link:>5}{e.anchor:>7}  {combined:<10} {tiers}")
+        combined = f"{est.anchor}" + (f" [{est.low}-{est.high}]" if est.low != est.high else "")
+        tiers = " + ".join(f"{c}@{d:.0f}" for c, d in est.tiers) + (" FALLBACK" if est.fallback else "")
+        print(f"{row}{est.link:>5}{est.anchor:>7}  {combined:<10} {tiers}")
 
     print("\nHubs where link count and anchor depth disagree:")
-    for group, exits in zip(groups, group_exits):
-        e = group.estimates
-        if e and e.link != e.anchor:
-            hub_depth = max(depths[c] for c, _ in group.hub)
-            print(f"  {group.family} ({'/'.join(sorted(group.names))}), hub {hub_depth:.0f}x: link {e.link}, "
-                  f"anchor {e.anchor}. {disagreement_reason(e, exits, hub_depth, depths)}")
+    for group in groups:
+        if group.estimates and group.estimates.link != group.estimates.anchor:
+            print(f"  {group.family} ({'/'.join(sorted(group.names))}): link {group.estimates.link}, anchor "
+                  f"{group.estimates.anchor}. {disagreement_reason(group, depths)}")
 
     truth: Counter[str] = Counter()
-    for line in open(truth_file):
-        if line.strip():
-            name = line.split("\t")[3].split("_")[0]
-            truth[families.get(name, name)] += 1
+    with open(truth_file) as bed:
+        for line in bed:
+            if line.strip():
+                name = line.split("\t")[3].split("_")[0]
+                truth[families.get(name, name)] += 1
     print("\nFamily-level scores, each hub once (low/high: ends of the combined range):")
     for estimator in ESTIMATORS:
-        eris: Counter[str] = Counter()
+        called: Counter[str] = Counter()
         for group in groups:
-            eris[group.family] += group_copies(group, estimator)
-        p, r, f1, wrong = family_scores(truth, eris)
+            called[group.family] += group_copies(group, estimator)
+        p, r, f1, wrong = family_scores(truth, called)
         print(f"  {estimator:<7} P={p:.3f} R={r:.3f} F1={f1:.3f}  wrong (truth, eris): {wrong}")
     p, r, f1 = compute_metrics(truth_file, loci, families, count="sum")
     print(f"  old, as tests/test_integration.py scores it (every locus, summed): P={p:.3f} R={r:.3f} F1={f1:.3f}")
 
     if reference:
-        anchors = {e.contig for exits in group_exits for side in exits.values() for e in side if e.kind == "anchor"}
-        tier_check(groups, group_exits, depths, map_to_replicons(genome, anchors, reference))
+        anchors = set().union(*(anchor_contigs(g) for g in groups))
+        tier_check(groups, depths, map_to_replicons(genome, anchors, reference))
 
 
 def main(argv: list[str] | None = None) -> None:
