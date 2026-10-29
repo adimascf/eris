@@ -79,18 +79,18 @@ def count_copies(truth_file: Path, eris_loci: list, families: dict[str, str] | N
     for locus in eris_loci:
         if not locus.targets: continue
         
-        # Extract base name from the locus target feature ID
-        # e.g., 'IS30_1_stitched' -> 'IS30'
-        first_target = locus.targets[0].id.split(',')[0]
-        is_name = first_target.split('_')[0]
-        
-        if is_name not in eris_loci_dict:
-            eris_loci_dict[is_name] = set()
-        eris_loci_dict[is_name].add(locus.id)
-        
-        # Track the max copy number depth estimate seen for this IS
-        eris_depth[is_name] = max(eris_depth.get(is_name, 0), int(locus.fractional_depth))
-        eris_sum[is_name] = eris_sum.get(is_name, 0) + int(locus.fractional_depth)
+        # Extract base names from every target feature ID, e.g. 'IS30_1_stitched' -> 'IS30'.
+        # A locus can hold several adjacent IS (IS26 then ISEc9 on pEC958); each one is a copy.
+        is_names = {target.id.split(',')[0].split('_')[0] for target in locus.targets}
+
+        for is_name in is_names:
+            if is_name not in eris_loci_dict:
+                eris_loci_dict[is_name] = set()
+            eris_loci_dict[is_name].add(locus.id)
+
+            # Track the max copy number depth estimate seen for this IS
+            eris_depth[is_name] = max(eris_depth.get(is_name, 0), int(locus.fractional_depth))
+            eris_sum[is_name] = eris_sum.get(is_name, 0) + int(locus.fractional_depth)
 
     # Resolve Final Copy Counts for Eris
     eris_counts = {}
@@ -113,9 +113,10 @@ def find_overlapping_claims(eris_loci: list, families: dict[str, str]) -> list[t
     claims = {}  # (family, contig) -> [(start, end, locus_id)]
     for locus in eris_loci:
         if not locus.targets: continue
-        name = locus.targets[0].id.split('_')[0]
-        for seg in locus.targets[0].segments:
-            claims.setdefault((families.get(name, name), seg.contig), []).append((seg.start, seg.end, locus.id))
+        for target in locus.targets:
+            name = target.id.split('_')[0]
+            for seg in target.segments:
+                claims.setdefault((families.get(name, name), seg.contig), []).append((seg.start, seg.end, locus.id))
 
     overlaps = set()
     for (_, contig), spans in claims.items():
@@ -159,8 +160,8 @@ BENCHMARKS = {
 # Families whose summed copy count is still wrong, as {family: (truth, eris)}. Every other family must match the
 # truth exactly. A family may get closer to its truth but never further away; update this table when one improves.
 KNOWN_COUNT_ERRORS = {
-    "complete": {"IS3": (14, 10), "IS5": (1, 0), "IS66": (8, 10)},
-    "fragmented": {"IS1": (5, 6), "IS3": (14, 12), "IS5": (1, 0), "IS66": (7, 10)},
+    "complete": {"IS3": (14, 12), "IS66": (8, 10)},
+    "fragmented": {"IS1": (5, 6), "IS3": (14, 12), "IS66": (7, 10)},
 }
 
 
