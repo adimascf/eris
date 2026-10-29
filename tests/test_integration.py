@@ -189,10 +189,11 @@ def test_benchmark_precision_recall(benchmark, families):
     # so exact name matches are impossible; score per IS family and report exact names for reference.
     print("exact-name P=%.3f R=%.3f F1=%.3f" % compute_metrics(truth_file, loci))
     print("family max P=%.3f R=%.3f F1=%.3f" % compute_metrics(truth_file, loci, families))
-    precision, recall, f1 = compute_metrics(truth_file, loci, families, count='sum')
-    print("family sum P=%.3f R=%.3f F1=%.3f" % (precision, recall, f1))
+    print("family sum P=%.3f R=%.3f F1=%.3f" % compute_metrics(truth_file, loci, families, count='sum'))
+    precision, recall, f1 = compute_metrics(truth_file, loci, families, count='hub')
+    print("family hub P=%.3f R=%.3f F1=%.3f" % (precision, recall, f1))
 
-    # Score summed copy numbers: the max-based count cannot see an IS reported twice
+    # Score summed copy numbers, each hub once: the max-based count cannot see an IS reported twice
     assert f1 >= 0.94, f"Family F1 on summed copy numbers must be >= 0.94, got {f1:.3f}"
 
 
@@ -241,15 +242,15 @@ def test_real_reads_count_each_replicon_once(real_reads, families):
 @needs_data
 @needs_real_reads
 def test_real_read_hubs_split_their_copies_by_depth_tier(real_reads):
-    # Copies per depth tier, chromosome first, from the complete EC958 genome's annotation
-    expected = {"IS1R": [3, 2], "ISEc23": [3, 1], "ISEc9": [1, 1], "ISEc12": [4]}
+    # Copies per depth tier, chromosome first, from the complete EC958 genome's annotation; none from the fallback
+    expected = {"IS1R": (5, (3, 2)), "ISEc23": (4, (3, 1)), "ISEc9": (2, (1, 1)), "ISEc12": (4, (4,))}
     found = {}
     for locus in real_reads:
         for target in locus.targets:
             name = target.id.split('_')[0]
-            if name in expected and locus.copy_number.hub:
-                found.setdefault(name, set()).add(tuple(n for n, _ in locus.copy_number.tiers))
-    assert found == {name: {tuple(tiers)} for name, tiers in expected.items()}
+            if name in expected and (copies := locus.copy_number).hub and not copies.fallback:
+                found.setdefault(name, set()).add((copies.estimate, tuple(n for n, _ in copies.tiers)))
+    assert found == {name: {copies} for name, copies in expected.items()}
 
 
 def test_compute_metrics_family_level_merges_cross_mapping_relatives(tmp_path):

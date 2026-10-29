@@ -237,8 +237,9 @@ class ReportRow:
         effect: Biological impact of the insertion on the gene (e.g., TRUNCATED, NONE).
         fractional_depth: The relative read depth of the variant path compared to the source contig, indicating sub-clonal abundance.
             In collapse mode the column is copy_number instead, followed by copy_number_min, copy_number_max,
-            copy_tiers (copies@mean anchor depth per depth tier) and copy_fallback, all taken from `copies`.
-        copies: The locus's copy number in collapse mode; None in variant mode.
+            copy_tiers (copies@mean anchor depth per depth tier; copies@genome baseline depth for a fallback) and
+            copy_fallback, all taken from `copy_number`.
+        copy_number: The locus's copy number in collapse mode; None in variant mode.
     """
     locus_id: str
     target: str
@@ -251,12 +252,12 @@ class ReportRow:
     orientation: str
     effect: str
     fractional_depth: float
-    copies: Optional['CopyNumber'] = None
+    copy_number: Optional[CopyNumber] = None
 
     @classmethod
     def header(cls, mode: str = 'variant') -> str:
         """Returns the TSV header string dynamically generated from the dataclass fields."""
-        fields = [f for f in cls.__annotations__ if f != 'copies']
+        fields = [f for f in cls.__annotations__ if f != 'copy_number']
 
         # Swap the header text if we are calculating copy numbers
         if mode == 'collapse':
@@ -268,7 +269,7 @@ class ReportRow:
     def to_tsv(self) -> str:
         """Formats the row data into a tab-separated string."""
         row = f"{self.locus_id}\t{self.target}\t{self.target_identity}\t{self.contig_path}\t{self.gene_id}\t{self.context}\t{self.dist_bp}\t{self.topo_hops}\t{self.orientation}\t{self.effect}"
-        if (c := self.copies) is None:
+        if (c := self.copy_number) is None:
             return f"{row}\t{self.fractional_depth}\n"
         tiers = ",".join(f"{n}@{depth:.1f}x" for n, depth in c.tiers)
         return f"{row}\t{c.estimate}\t{c.low}\t{c.high}\t{tiers}\t{str(c.fallback).lower()}\n"
@@ -357,7 +358,7 @@ class OutputManager:
                 orientation="-",
                 effect="NONE",
                 fractional_depth=locus.fractional_depth,
-                copies=self._copies(locus),
+                copy_number=self._copy_number(locus),
             )
             self.tsv_handle.write(row.to_tsv())
         else:
@@ -379,11 +380,11 @@ class OutputManager:
             orientation=relation.orientation.value,
             effect=relation.effect.name,
             fractional_depth=locus.fractional_depth,
-            copies=self._copies(locus),
+            copy_number=self._copy_number(locus),
         )
         self.tsv_handle.write(row.to_tsv())
 
-    def _copies(self, locus: 'Locus') -> Optional['CopyNumber']:
+    def _copy_number(self, locus: 'Locus') -> Optional[CopyNumber]:
         """The locus's copy number for the report: collapse mode only, one copy if it was never set."""
         if self.mode != 'collapse':
             return None

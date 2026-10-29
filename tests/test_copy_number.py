@@ -57,7 +57,8 @@ def test_a_hub_without_anchors_is_measured_against_the_unique_contigs_and_flagge
     assign_copy_numbers(loci, genome(contigs, edges))
 
     copies = loci[0].copy_number
-    assert (copies.estimate, copies.fallback, copies.tiers) == (4, True, ((4, 40.0),))
+    # No link reaches an anchor, so there is nothing to give a range against
+    assert (copies.estimate, copies.low, copies.high, copies.fallback, copies.tiers) == (4, 4, 4, True, ((4, 40.0),))
 
 
 def test_a_hub_reports_a_range_when_stubs_hide_links_from_the_count():

@@ -70,7 +70,7 @@ def test_collapse_report_gives_the_copy_number_range_and_its_depth_tiers(tmp_pat
 
 def test_collapse_report_flags_a_copy_number_from_the_genome_baseline(tmp_path):
     locus = _locus("locus_1", ("hub", 0, 1300, Strand.FORWARD))
-    locus.copy_number = CopyNumber(4, 1, 4, ((4, 38.9),), fallback=True)
+    locus.copy_number = CopyNumber(4, 4, 4, ((4, 38.9),), fallback=True)
 
     assert _report(tmp_path, locus, 'collapse')["copy_fallback"] == "true"
 

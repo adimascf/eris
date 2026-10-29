@@ -7,6 +7,7 @@ an anchor checks it, giving a range when the two disagree.
 """
 import math
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Callable, NamedTuple, TYPE_CHECKING
 
 from eris.graph import Edge, Graph
@@ -35,7 +36,7 @@ class CopyNumber:
     estimate: int
     low: int
     high: int
-    tiers: tuple[tuple[int, float], ...] = ()
+    tiers: tuple[tuple[int, float], ...] = ()  # for a fallback, (copies, baseline depth)
     fallback: bool = False
     hub: frozenset[str] = frozenset()
 
@@ -43,11 +44,19 @@ class CopyNumber:
 UNIQUE = CopyNumber(1, 1, 1)
 
 
+class WalkEndKind(StrEnum):
+    """What a walk out of a repeat hub ended at."""
+    ANCHOR = 'anchor'
+    REPEAT = 'repeat'  # another hub's contig
+    DEAD_END = 'dead_end'  # the stubs crossed exceeded STUB_BUDGET
+    TIP = 'tip'  # a stub with no onward link
+
+
 class WalkEnd(NamedTuple):
-    """Where one walk out of a repeat hub ends: an anchor, a repeat (another hub), a dead end or a tip."""
+    """Where one walk out of a repeat hub ends."""
     contig: str
     strand: Strand
-    kind: str
+    kind: WalkEndKind
 
 
 # Functions ------------------------------------------------------------------------------------------------------------
@@ -138,13 +147,13 @@ def _walk_out(graph: Graph, hub: dict[str, Strand], lengths: dict[str, int],
             used += lengths[edge.v] - edge.overlap
             onward = [e for e in graph.get_neighbors(edge.v) if e.u_strand == edge.v_strand]
             if edge.v in repeats:
-                kind = "repeat"
+                kind = WalkEndKind.REPEAT
             elif lengths[edge.v] >= MIN_ANCHOR_LENGTH:
-                kind = "anchor"
+                kind = WalkEndKind.ANCHOR
             elif used > STUB_BUDGET:
-                kind = "dead_end"
+                kind = WalkEndKind.DEAD_END
             elif not onward:
-                kind = "tip"
+                kind = WalkEndKind.TIP
             else:
                 stack.extend((e, used) for e in onward)
                 continue
@@ -161,6 +170,7 @@ def _baseline_depth(genome: 'GenomeAssembly', repeats: set[str]) -> float:
 
 
 def _round_half_up(x: float) -> int:
+    """Rounds .5 up, where Python's round() goes to the even neighbour (2.5 would give 2)."""
     return math.floor(x + 0.5)
 
 
@@ -171,17 +181,19 @@ def _estimate(hub_depth: float, ends: dict[str, list[WalkEnd]], depths: dict[str
     over the depth tiers of its anchors, each tier weighted by the anchors it has on the side that reaches more of
     them, so with one tier it is hub depth over mean anchor depth, and a tier one side misses still gets its copy.
     The check is the number of links to anchors, halved for the two sides. With no anchors, the estimate is hub depth
-    over `baseline()`, flagged as a fallback.
+    over `baseline()`, flagged as a fallback; there are no links to check it against, so it gives no range.
     """
-    anchors = {side: [depths[e.contig] for e in side_ends if e.kind == "anchor"] for side, side_ends in ends.items()}
-    links = max(1, _round_half_up(sum(len(a) for a in anchors.values()) / 2))
+    anchors = {side: [depths[e.contig] for e in side_ends if e.kind == WalkEndKind.ANCHOR]
+               for side, side_ends in ends.items()}
     if not any(anchors.values()):
         depth = baseline()
         estimate = max(1, _round_half_up(hub_depth / depth))
-        return CopyNumber(estimate, min(links, estimate), max(links, estimate), ((estimate, depth),), True, hub)
+        return CopyNumber(estimate, estimate, estimate, ((estimate, depth),), True, hub)
+    links = _round_half_up(sum(len(a) for a in anchors.values()) / 2)
     tiers = depth_tiers([d for side in anchors.values() for d in side])
-    per_side = [(max(sum(d in t for d in side) for side in anchors.values()), sum(t) / len(t)) for t in tiers]
-    scale = hub_depth / sum(n * depth for n, depth in per_side)
-    tier_copies = tuple((max(1, _round_half_up(n * scale)), depth) for n, depth in per_side)
+    # (anchors on the side that reaches more of them, mean depth) per tier
+    tier_anchors = [(max(sum(d in t for d in side) for side in anchors.values()), sum(t) / len(t)) for t in tiers]
+    scale = hub_depth / sum(n * depth for n, depth in tier_anchors)
+    tier_copies = tuple((max(1, _round_half_up(n * scale)), depth) for n, depth in tier_anchors)
     estimate = sum(copies for copies, _ in tier_copies)
     return CopyNumber(estimate, min(links, estimate), max(links, estimate), tier_copies, False, hub)
