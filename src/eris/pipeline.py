@@ -18,6 +18,7 @@ from eris.graph import TopologyEngine
 from eris.alignment import AlignmentBatch, AlignmentRecord, pooled_identity
 from eris.interval import IntervalBatch, Context, Strand, Interval
 from eris.constants import FeatureType, Orientation, Effect
+from eris.copy_number import CopyNumber, assign_copy_numbers
 
 
 # DataClasses ----------------------------------------------------------------------------------------------------------
@@ -129,7 +130,8 @@ class Locus:
     passengers: list['FeatureRelation']
     upstream_flanks: list['FeatureRelation']
     downstream_flanks: list['FeatureRelation']
-    fractional_depth: float = 1.0  # Tracks the sub-clonal abundance
+    fractional_depth: float = 1.0  # Fractional depth in variant mode, copy number in collapse mode
+    copy_number: Optional[CopyNumber] = None  # Collapse mode only
 
     def extract_sequence(self, genome: 'GenomeAssembly') -> str:
         """
@@ -329,16 +331,10 @@ class LocusBuilder:
                 for t in targets
             ]
 
-            # copy number estimation
-            if getattr(self.topology_engine, 'mode', 'variant') == 'collapse':
-                contig_depth = self.genome.contig_depths.get(contig, 1.0)
-                metric_val = float(max(1, round(contig_depth / self.topology_engine.median_depth)))
-            else:
-                metric_val = 1.0
+            # Collapse mode's copy number is set once every locus is built (see assign_copy_numbers)
             locus = Locus(
                 id=f"locus_{uuid4().hex[:8]}", contig=contig, start=macro.start, end=macro.end,
-                targets=target_features, passengers=[], upstream_flanks=[], downstream_flanks=[],
-                fractional_depth=metric_val
+                targets=target_features, passengers=[], upstream_flanks=[], downstream_flanks=[]
             )
 
             # Determine macro target context bounds
@@ -373,8 +369,7 @@ class LocusBuilder:
         last = fragments[-1]
 
         if getattr(self.topology_engine, 'mode', 'variant') == 'collapse':
-            max_path_depth = max(self.genome.contig_depths.get(f.t_name, 1.0) for f in fragments)
-            metric_val = float(max(1, round(max_path_depth / self.topology_engine.median_depth)))
+            metric_val = 1.0  # Copy number is set once every locus is built (see assign_copy_numbers)
         else:
             # Calculate the fractional flow of the stitched path
             source_depth = self.genome.contig_depths.get(first.t_name, 1.0)
@@ -529,19 +524,12 @@ class Pipeline:
         #     for n, _ in enumerate(batch.q_names):
         #         print(batch.get_record(n))
 
-        # Calculate global median depth for the collapse mode
-        if genome.contig_depths:
-            median_depth = max(0.001, float(np.median(list(genome.contig_depths.values()))))
-        else:
-            median_depth = 1.0
-
         topology_engine = TopologyEngine(
             edges=genome.edges,
             contig_lengths=genome.contig_lengths,
             contig_depths=genome.contig_depths,
             features=gene_intervals,
-            mode=self.mode,
-            median_depth=median_depth)
+            mode=self.mode)
 
         builder = LocusBuilder(
             topology_engine=topology_engine,
@@ -553,4 +541,9 @@ class Pipeline:
             genes=gene_cds
         )
 
-        yield from builder.assemble(alignments, min_coverage=self.min_coverage, min_identity=self.min_identity)
+        loci = builder.assemble(alignments, min_coverage=self.min_coverage, min_identity=self.min_identity)
+        if self.mode == 'collapse':
+            # A walk out of one locus's hub stops at any other locus's hub, so every locus must be built first
+            loci = list(loci)
+            assign_copy_numbers(loci, genome)
+        yield from loci

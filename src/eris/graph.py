@@ -129,11 +129,11 @@ class TopologyEngine:
     It provides tools for "stitching" together partial alignments that span
     multiple contigs by finding valid physical paths through the graph.
     """
-    __slots__ = ('_graph', 'contig_lengths', 'contig_depths', 'features', '_visited_nodes', 'mode', 'median_depth',
+    __slots__ = ('_graph', 'contig_lengths', 'contig_depths', 'features', '_visited_nodes', 'mode',
                  '_max_overlap')
 
     def __init__(self, edges: Iterable[Edge], contig_lengths: dict[str, int], contig_depths: dict[str, float],
-                 features: dict[str, IntervalBatch] = None, mode: str = 'variant', median_depth: float = 1.0):
+                 features: dict[str, IntervalBatch] = None, mode: str = 'variant'):
         """
         Initialize the TopologyEngine.
 
@@ -153,7 +153,6 @@ class TopologyEngine:
         self._visited_nodes: set[tuple[str, int]] = set()
 
         self.mode: str = mode
-        self.median_depth: float = median_depth
 
 
     def resolve_split_alignments(self, alignments: dict) -> tuple[dict, list[list['AlignmentRecord']]]:
