@@ -25,10 +25,10 @@ def _batch(rows):
     )
 
 
-def _builder(lengths, edges=()):
-    depths = {c: 10.0 for c in lengths}
+def _builder(lengths, edges=(), mode='variant', depths=None):
+    depths = depths if depths is not None else {c: 10.0 for c in lengths}
     genome = GenomeAssembly("test", {c: Seq("A" * n) for c, n in lengths.items()}, list(edges), depths, lengths)
-    engine = TopologyEngine(list(edges), lengths, depths, mode='variant')
+    engine = TopologyEngine(list(edges), lengths, depths, mode=mode)
     return LocusBuilder(engine, genome, max_feature_hops=0)
 
 
@@ -74,6 +74,38 @@ def test_stitched_locus_reports_the_strand_each_contig_is_read_on():
     loci = list(builder.assemble(alignments, min_coverage=0.30, min_identity=0.0))
 
     assert [format_contig_path(locus) for locus in loci] == ["ctgA+,ctgB-,ctgC+"]
+
+
+def _two_targets_through_one_hub(mode):
+    """
+    IS1A and IS1B are near-identical: each runs off its own anchor, across the unaligned 1 kb hub, and into another
+    anchor. IS1A aligns 600 bp on its anchors, IS1B only 200 bp.
+    """
+    hub, anchors = {"hub": 1000}, {c: 5000 for c in ("a1", "b1", "a2", "b2")}
+    edges = [Edge("a1", Strand.FORWARD, "hub", Strand.FORWARD), Edge("hub", Strand.FORWARD, "b1", Strand.FORWARD),
+             Edge("a2", Strand.FORWARD, "hub", Strand.FORWARD), Edge("hub", Strand.FORWARD, "b2", Strand.FORWARD)]
+    builder = _builder(hub | anchors, edges, mode=mode, depths={"hub": 20.0} | {c: 10.0 for c in anchors})
+    alignments = {
+        "a1": _batch([("IS1A", 1600, 0, 300, "a1", 5000, 4700, 5000, 300, 300)]),
+        "b1": _batch([("IS1A", 1600, 1300, 1600, "b1", 5000, 0, 300, 300, 300)]),
+        "a2": _batch([("IS1B", 1400, 0, 100, "a2", 5000, 4900, 5000, 100, 100)]),
+        "b2": _batch([("IS1B", 1400, 1300, 1400, "b2", 5000, 0, 100, 100, 100)]),
+    }
+    return list(builder.assemble(alignments, min_coverage=0.30, min_identity=0.0))
+
+
+def test_collapse_mode_reports_a_hub_once_when_near_identical_targets_both_stitch_through_it():
+    # The hub is reported once, named for IS1A, which aligns more of itself
+    loci = _two_targets_through_one_hub('collapse')
+
+    assert [(t.id, [s.contig for s in t.segments]) for locus in loci for t in locus.targets] == [
+        ("IS1A_stitched", ["a1", "hub", "b1"])]
+
+
+def test_variant_mode_keeps_every_stitched_path_through_a_hub():
+    loci = _two_targets_through_one_hub('variant')
+
+    assert sorted(t.id for locus in loci for t in locus.targets) == ["IS1A_stitched", "IS1B_stitched"]
 
 
 def _path_locus(*segments):

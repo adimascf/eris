@@ -18,7 +18,7 @@ from eris.graph import TopologyEngine
 from eris.alignment import AlignmentBatch, AlignmentRecord, pooled_identity
 from eris.interval import IntervalBatch, Context, Strand, Interval
 from eris.constants import FeatureType, Orientation, Effect
-from eris.copy_number import CopyNumber, assign_copy_numbers
+from eris.copy_number import CopyNumber, assign_copy_numbers, covers_contig
 
 
 # DataClasses ----------------------------------------------------------------------------------------------------------
@@ -210,11 +210,16 @@ class LocusBuilder:
         cleaned_alignments, resolved_paths = self.topology_engine.resolve_split_alignments(alignments)
 
         # Filter and yield STITCHED paths
+        kept_paths = []
         for path in resolved_paths:
             # Calculate total coverage of the stitched path against the IS query
             coverage = (path[-1].q_end - path[0].q_start) / path[0].q_length
             if coverage >= min_coverage and pooled_identity(path) >= min_identity:
-                yield self._stitch(path)
+                kept_paths.append(path)
+        if getattr(self.topology_engine, 'mode', 'variant') == 'collapse':
+            kept_paths = self._one_path_per_hub(kept_paths)
+        for path in kept_paths:
+            yield self._stitch(path)
 
         # Filter and yield LOCAL (unstitched) alignments
         for contig_id, batch in cleaned_alignments.items():
@@ -226,6 +231,30 @@ class LocusBuilder:
                 contig_gene_intervals = self.topology_engine.features.get(contig_id, IntervalBatch.empty())
                 for locus in self._build_local(contig_id, intact_batch, contig_gene_intervals):
                     yield locus
+
+    def _one_path_per_hub(self, paths: list[list['AlignmentRecord']]) -> list[list['AlignmentRecord']]:
+        """
+        Keeps one stitched path per repeat hub (#14). Near-identical targets (IS1A, IS1R, ...) each stitch their own
+        path through the contigs one collapsed repeat covers end to end, mostly as synthetic records, and would each
+        report the whole hub. Paths that share a hub contig, directly or through another path, are one locus; the
+        one that aligns the most target bases names it.
+        """
+        overlap = max((e.overlap for e in self.genome.edges), default=0)
+        groups: list[tuple[set[str], list[list['AlignmentRecord']]]] = []
+        for path in paths:
+            hub = {f.t_name for f in path if covers_contig(f.t_length, f.t_start, f.t_end, overlap)}
+            members = [path]
+            for group in [g for g in groups if g[0] & hub]:
+                other_hub, other_members = group
+                hub |= other_hub
+                members = other_members + members
+                groups.remove(group)
+            groups.append((hub, members))
+
+        def aligned_bases(path: list['AlignmentRecord']) -> tuple[int, float]:
+            """Target bases the path's real fragments align, then pooled identity to break ties."""
+            return sum(f.q_end - f.q_start for f in path if f.idx != -1), pooled_identity(path)
+        return [max(members, key=aligned_bases) for _, members in groups]
 
     def _resolve_relation(self, contig: str, idx: int, interval_batch: 'IntervalBatch',
                           spatial: Context, dist: int, topo: int, target_strand: Strand,

@@ -92,6 +92,11 @@ def depth_tiers(depths: list[float], tolerance: float = TIER_TOLERANCE) -> list[
     return tiers
 
 
+def covers_contig(length: int, start: int, end: int, overlap: int) -> bool:
+    """True if an alignment from `start` to `end` covers a contig of `length` end to end, so the contig is a hub's."""
+    return length - (end - start) <= overlap + END_SLOP
+
+
 def _hub(locus: 'Locus', lengths: dict[str, int], overlap: int) -> dict[str, Strand]:
     """
     The contigs a locus's targets cover end to end, each with the strand it is first read on. Together they are the
@@ -100,7 +105,7 @@ def _hub(locus: 'Locus', lengths: dict[str, int], overlap: int) -> dict[str, Str
     hub: dict[str, Strand] = {}
     for target in locus.targets:
         for seg in target.segments:
-            if lengths[seg.contig] - (seg.end - seg.start) <= overlap + END_SLOP:
+            if covers_contig(lengths[seg.contig], seg.start, seg.end, overlap):
                 hub.setdefault(seg.contig, seg.strand)
     return hub
 

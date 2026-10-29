@@ -59,8 +59,8 @@ def count_copies(truth_file: Path, eris_loci: list, families: dict[str, str] | N
 
     `count` sets how an IS's loci become a copy count: 'max' takes max(#loci, max copy number), which
     forgives a locus reported twice; 'sum' adds up every locus's copy number, as a user summing the report would;
-    'hub' is 'sum' with each repeat hub counted once per IS family, since until #14 is fixed several near-identical
-    names report the same hub, each with the hub's copy number. 'hub' needs `families`.
+    'hub' is 'sum' with each repeat hub counted once per IS family, a guard against near-identical names each
+    reporting the same hub with the hub's copy number (#14). 'hub' needs `families`.
     """
     # Parse Ground Truth
     gt_counts = {}
@@ -241,9 +241,23 @@ def test_real_reads_count_each_replicon_once(real_reads, families):
 
 @needs_data
 @needs_real_reads
+def test_real_reads_report_each_hub_once(real_reads, families):
+    # Near-identical names (IS26, IS15, IS15DI, IS15DIV) each stitched a path through the IS26 hub (#14)
+    assert find_overlapping_claims(real_reads, families) == []
+    # ... and the hub is still reported, once: IS6 through the IS26 hub, IS1 through the 200-270x IS1 contigs
+    hubs = {"IS6": {"2421250", "2408206", "2421022"}, "IS1": {"2420366", "2060500", "2421094", "2421096", "2420860"}}
+    claiming = {family: [locus.id for locus in real_reads
+                         if any(families.get(t.id.split('_')[0]) == family and {s.contig for s in t.segments} & hub
+                                for t in locus.targets)]
+                for family, hub in hubs.items()}
+    assert {family: len(ids) for family, ids in claiming.items()} == {"IS6": 1, "IS1": 1}
+
+
+@needs_data
+@needs_real_reads
 def test_real_read_hubs_split_their_copies_by_depth_tier(real_reads):
     # Copies per depth tier, chromosome first, from the complete EC958 genome's annotation; none from the fallback
-    expected = {"IS1R": (5, (3, 2)), "ISEc23": (4, (3, 1)), "ISEc9": (2, (1, 1)), "ISEc12": (4, (4,))}
+    expected = {"IS1A": (5, (3, 2)), "ISEc23": (4, (3, 1)), "ISEc9": (2, (1, 1)), "ISEc12": (4, (4,))}
     found = {}
     for locus in real_reads:
         for target in locus.targets:
