@@ -63,6 +63,7 @@ eris -i assembly.gfa -d targets.fasta -o results/sample_A
 * `--tolerance`: Distance tolerance in base pairs for merging clustered alignments (default: `0`).
 * `-c`, `--min-coverage`: Minimum target coverage, a fraction from `0.0` to `1.0`, required to report a locus target (default: `0.3`).
 * `--min-identity`: Minimum target identity (matching bases over aligned bases, gaps counted), a fraction from `0.0` to `1.0`, required to report a locus target (default: `0.0`, no filtering). A stitched locus is kept or dropped on the identity pooled over its fragments.
+* `--merge-synonyms [IS.csv]`: Rename IS targets that ISfinder lists as synonyms or isoforms (e.g. `IS1A`/`IS1B`, `IS30`/`IS30D`) to the first name found in the genome, so hits of one element can be stitched and counted together. Names are linked only through ISfinder's table, never because they look alike (`IS1A` and `IS1F` stay separate). With no path, [ISfinder's IS.csv](https://raw.githubusercontent.com/thanhleviet/ISfinder-sequences/master/IS.csv) is downloaded once and cached in `~/.cache/eris`.
 
 ### Outputs
 Depending on the arguments provided, eris will output:

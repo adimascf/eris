@@ -2,7 +2,7 @@
 name = "pyeris"  # "eris" is taken on pypi
 authors = [{name = "Tom Stanton", email = "tomdstanton@gmail.com"}]
 description = "Graph-aware contextual annotation of targeted genomic features"
-dependencies = ["numpy>=2.4", "numba>=0.65", "mappy>=2.3", "pyfgs>=0.0.1", "biopython>=1.87"]
+dependencies = ["numpy>=2.4", "numba>=0.65", "mappy>=2.3", "pyfgs>=0.0.1", "biopython>=1.87", "certifi>=2024.2.2"]
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
 dynamic = ["version"]
