@@ -6,11 +6,11 @@ Copy number counts each replicon once (see CONTEXT.md and docs/adr/0003). The es
 1. old: the deepest contig on the locus's path over the genome's median contig depth, as eris reports now.
 2. link: the number of links from the repeat hub to its anchors, averaged over the hub's two sides.
 3. anchor: hub depth over anchor depth, with anchors grouped into depth tiers.
-4. combined: (3) as the estimate and (2) as the check, giving a min/max range when they disagree. A hub with no
-   anchors falls back to hub depth over the length-weighted depth of contigs of at least 1 kb, and is flagged.
+   A hub with no anchors falls back to hub depth over the length-weighted depth of contigs of at least 1 kb, and is
+   flagged. eris reports (3) as copy_number and (2) as copy_number_edges.
 
 A hub is the set of contigs a locus target covers end to end; a target with sequence beyond it on its contig sits in
-unique sequence and counts 1 under estimators 2-4. Loci of one family that share a hub are scored once, since until
+unique sequence and counts 1 under estimators 2 and 3. Loci of one family that share a hub are scored once, since until
 #14 is fixed several near-identical names walk through the same hub. Families are scored with the copy-aware P/R/F1
 of tests/test_integration.py.
 
@@ -49,7 +49,7 @@ ASSEMBLIES = [
 REFERENCE = "EC958_complete_genome.fasta"
 REPLICONS = {"HG941718.1": "chr", "HG941719.1": "pEC958", "HG941720.1": "pEC958B"}
 TOLERANCES = (1.2, 1.3, 1.35, 1.4, 1.45, 1.5, 1.6, 1.8)
-ESTIMATORS = ("old", "link", "anchor", "low", "high")
+ESTIMATORS = ("old", "link", "anchor")
 
 MIN_ANCHOR_LENGTH = 1000  # bp; a shorter contig next to a hub is a stub that the walk crosses
 STUB_BUDGET = 500  # bp of stubs a walk may cross before it gives up (ISEc12's flanks break into 200-400 bp stubs)
@@ -137,11 +137,9 @@ def walk_out(graph: Graph, hub: list[tuple[str, Strand]], lengths: dict[str, int
 
 
 class Estimates(NamedTuple):
-    """Estimators 2-4 for one repeat hub. `tiers` holds (copies, mean anchor depth) per depth tier."""
+    """Estimators 2 and 3 for one repeat hub. `tiers` holds (copies, mean anchor depth) per depth tier."""
     link: int
     anchor: int
-    low: int
-    high: int
     tiers: list[tuple[int, float]]
     fallback: bool
 
@@ -164,7 +162,7 @@ def estimate(hub_depth: float, ends: dict[str, list[WalkEnd]], depths: dict[str,
     link = max(1, round_half_up(sum(len(a) for a in anchors.values()) / 2))
     if not any(anchors.values()):
         anchor = max(1, round_half_up(hub_depth / baseline))
-        return Estimates(link, anchor, min(link, anchor), max(link, anchor), [(anchor, baseline)], True)
+        return Estimates(link, anchor, [(anchor, baseline)], True)
 
     tiers = depth_tiers([d for side in anchors.values() for d in side], tolerance)
     # Anchors per tier on the side that reached more of them, scaled so the tiers' summed depth equals the hub's
@@ -172,7 +170,7 @@ def estimate(hub_depth: float, ends: dict[str, list[WalkEnd]], depths: dict[str,
     scale = hub_depth / sum(n * depth for n, depth in per_side)
     tier_copies = [(max(1, round_half_up(n * scale)), depth) for n, depth in per_side]
     anchor = max(1, sum(copies for copies, _ in tier_copies))
-    return Estimates(link, anchor, min(link, anchor), max(link, anchor), tier_copies, False)
+    return Estimates(link, anchor, tier_copies, False)
 
 
 class LocusHub(NamedTuple):
@@ -333,7 +331,7 @@ def compare(label: str, genome: GenomeAssembly, truth_file: Path, db: TargetData
 
     print(f"\n=== {label}: {genome.id}, truth {truth_file.name}; {len(loci)} loci, {len(groups)} scoring groups "
           f"(hubs or loci in unique sequence); baseline (contigs >= {MIN_ANCHOR_LENGTH} bp, not hubs) {baseline:.1f}x ===")
-    print(f"{'family':<12}{'target':<10}{'kind':<9}{'old':>4}{'link':>5}{'anchor':>7}  combined   tiers (copies@depth)")
+    print(f"{'family':<12}{'target':<10}{'kind':<9}{'old':>4}{'link':>5}{'anchor':>7}  tiers (copies@depth)")
     # A locus can hold targets of several families, each in its own group
     group_of = {(lid, g.family): g for g in groups for lid in g.locus_ids}
     for locus, target, hub in sorted(targets, key=lambda x: (x[2].family, x[2].name)):
@@ -341,11 +339,10 @@ def compare(label: str, genome: GenomeAssembly, truth_file: Path, db: TargetData
         kind = "stitched" if len(target.segments) > 1 else "local"
         row = f"{hub.family:<12}{hub.name:<10}{kind:<9}{hub.old:>4.0f}"
         if est is None:
-            print(f"{row}{1:>5}{1:>7}  1          unique sequence")
+            print(f"{row}{1:>5}{1:>7}  unique sequence")
             continue
-        combined = f"{est.anchor}" + (f" [{est.low}-{est.high}]" if est.low != est.high else "")
         tiers = " + ".join(f"{c}@{d:.0f}" for c, d in est.tiers) + (" FALLBACK" if est.fallback else "")
-        print(f"{row}{est.link:>5}{est.anchor:>7}  {combined:<10} {tiers}")
+        print(f"{row}{est.link:>5}{est.anchor:>7}  {tiers}")
 
     print("\nHubs where link count and anchor depth disagree:")
     for group in groups:
@@ -359,7 +356,7 @@ def compare(label: str, genome: GenomeAssembly, truth_file: Path, db: TargetData
             if line.strip():
                 name = line.split("\t")[3].split("_")[0]
                 truth[families.get(name, name)] += 1
-    print("\nFamily-level scores, each hub once (low/high: ends of the combined range):")
+    print("\nFamily-level scores, each hub once:")
     for estimator in ESTIMATORS:
         called: Counter[str] = Counter()
         for group in groups:

@@ -55,22 +55,21 @@ def _report(tmp_path, locus, mode):
     return dict(zip(header.split("\t"), row.split("\t")))
 
 
-def test_collapse_report_gives_the_copy_number_range_and_its_depth_tiers(tmp_path):
+def test_collapse_report_gives_both_copy_numbers_and_the_depth_tiers(tmp_path):
     # IS1 on the real-read EC958 assembly: 3 chromosome copies and 2 pEC958 copies, link count 4
     locus = _locus("locus_1", ("hub", 0, 768, Strand.FORWARD))
-    locus.copy_number = CopyNumber(5, 4, 5, ((3, 38.04), (2, 77.0)))
+    locus.copy_number = CopyNumber(5, 4, ((3, 38.04), (2, 77.0)))
     locus.fractional_depth = 5.0
 
     row = _report(tmp_path, locus, 'collapse')
 
-    assert {k: row[k] for k in list(row)[-5:]} == {
-        "copy_number": "5", "copy_number_min": "4", "copy_number_max": "5", "copy_tiers": "3@38.0x,2@77.0x",
-        "copy_fallback": "false"}
+    assert {k: row[k] for k in list(row)[-4:]} == {
+        "copy_number": "5", "copy_number_edges": "4", "copy_tiers": "3@38.0x,2@77.0x", "copy_fallback": "false"}
 
 
 def test_collapse_report_flags_a_copy_number_from_the_genome_baseline(tmp_path):
     locus = _locus("locus_1", ("hub", 0, 1300, Strand.FORWARD))
-    locus.copy_number = CopyNumber(4, 4, 4, ((4, 38.9),), fallback=True)
+    locus.copy_number = CopyNumber(4, 0, ((4, 38.9),), fallback=True)
 
     assert _report(tmp_path, locus, 'collapse')["copy_fallback"] == "true"
 

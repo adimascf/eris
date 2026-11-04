@@ -42,7 +42,7 @@ def test_a_hub_shares_its_depth_out_over_the_depth_tiers_of_its_anchors():
     assign_copy_numbers(loci, genome({"hub": (768, 272), **contigs}, edges))
 
     copies = loci[0].copy_number
-    assert (copies.estimate, copies.low, copies.high, copies.fallback) == (5, 5, 5, False)
+    assert (copies.estimate, copies.edges, copies.fallback) == (5, 5, False)
     assert [n for n, _ in copies.tiers] == [3, 2]
     assert loci[0].fractional_depth == 5
 
@@ -57,11 +57,11 @@ def test_a_hub_without_anchors_is_measured_against_the_unique_contigs_and_flagge
     assign_copy_numbers(loci, genome(contigs, edges))
 
     copies = loci[0].copy_number
-    # No link reaches an anchor, so there is nothing to give a range against
-    assert (copies.estimate, copies.low, copies.high, copies.fallback, copies.tiers) == (4, 4, 4, True, ((4, 40.0),))
+    # No link reaches an anchor, so the link count is 0
+    assert (copies.estimate, copies.edges, copies.fallback, copies.tiers) == (4, 0, True, ((4, 40.0),))
 
 
-def test_a_hub_reports_a_range_when_stubs_hide_links_from_the_count():
+def test_a_hubs_link_count_is_reported_beside_its_depth_estimate_when_stubs_hide_links():
     # ISEc12: 4 chromosome copies at 153x, but two upstream flanks break into stubs, so only 2 + 4 links reach anchors
     contigs, edges = hub_with_anchors("hub", [30, 39], [30, 29, 41, 45])
     contigs.update({"s1": (300, 20), "s2": (300, 20), "s1b": (400, 20), "s2b": (400, 20)})
@@ -71,7 +71,7 @@ def test_a_hub_reports_a_range_when_stubs_hide_links_from_the_count():
     assign_copy_numbers(loci, genome({"hub": (1300, 153), **contigs}, edges))
 
     copies = loci[0].copy_number
-    assert (copies.estimate, copies.low, copies.high) == (4, 3, 4)
+    assert (copies.estimate, copies.edges) == (4, 3)
 
 
 def test_a_target_in_unique_sequence_is_one_copy():
@@ -80,7 +80,7 @@ def test_a_target_in_unique_sequence_is_one_copy():
 
     assign_copy_numbers(loci, genome({"plasmid": (60000, 76)}, []))
 
-    assert loci[0].copy_number.estimate == 1
+    assert (loci[0].copy_number.estimate, loci[0].copy_number.edges) == (1, 1)
     assert loci[0].copy_number.hub == frozenset()
     assert loci[0].fractional_depth == 1
 
@@ -94,7 +94,7 @@ def test_an_anchor_between_two_inverted_copies_counts_once_per_link():
     assign_copy_numbers(loci, genome(contigs, edges))
 
     copies = loci[0].copy_number
-    assert (copies.estimate, copies.low, copies.high) == (2, 2, 2)
+    assert (copies.estimate, copies.edges) == (2, 2)
 
 
 def test_a_walk_stops_at_another_targets_hub():
@@ -107,7 +107,7 @@ def test_a_walk_stops_at_another_targets_hub():
     assign_copy_numbers(loci, genome({"IS26hub": (820, 150), **contigs}, edges))
 
     copies = loci[0].copy_number
-    assert (copies.estimate, copies.low, copies.high) == (2, 2, 2)  # 3 anchor links round half up to 2
+    assert (copies.estimate, copies.edges) == (2, 2)  # 3 anchor links round half up to 2
     assert loci[1].copy_number.hub == frozenset({"ISEc9hub"})
 
 

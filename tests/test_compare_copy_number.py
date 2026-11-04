@@ -64,16 +64,16 @@ def estimate(hub_depth, upstream, downstream, baseline=39.0):
 def test_estimate_splits_a_hub_into_depth_tiers_by_its_anchors():
     # IS1 hub on EC958: 3 chromosome copies at ~37x and 2 pEC958 copies at ~76x, 3 x 37 + 2 x 76 = 263
     est = estimate(272, anchors(30, 42, 44, 75, 77), anchors(32, 44, 47, 78, 79))
-    assert (est.link, est.anchor, est.low, est.high) == (5, 5, 5, 5)
+    assert (est.link, est.anchor) == (5, 5)
     assert [copies for copies, _ in est.tiers] == [3, 2]
 
 
-def test_estimate_reports_a_range_when_stubs_hide_links():
+def test_estimate_link_count_falls_short_when_stubs_hide_links():
     # ISEc12: 4 chromosome copies at 153x, but one side breaks into stubs, so only 2 + 4 links reach anchors
     up_ends, up_depths = anchors(30, 39)
     up_ends += [cn.WalkEnd("stub1", F, "dead_end"), cn.WalkEnd("stub2", F, "dead_end")]
     est = estimate(153, (up_ends, up_depths), anchors(30, 29, 41, 45))
-    assert (est.link, est.anchor, est.low, est.high, est.fallback) == (3, 4, 3, 4, False)
+    assert (est.link, est.anchor, est.fallback) == (3, 4, False)
 
 
 def test_estimate_falls_back_to_the_genome_baseline_without_anchors():

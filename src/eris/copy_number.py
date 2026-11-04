@@ -2,8 +2,8 @@
 Collapse-mode copy number: the copies of a locus in the genome, counting each replicon once (docs/adr/0003).
 
 A locus whose target sits in unique sequence is one copy. Copies that collapsed into a repeat hub are counted from the
-hub's anchors: the hub's depth is shared out over the depth tiers of its anchors, and the number of links that reach
-an anchor checks it, giving a range when the two disagree.
+hub's anchors: the hub's depth is shared out over the depth tiers of its anchors. The number of links that reach an
+anchor gives a second count, reported beside it so the two can be compared.
 """
 import math
 from dataclasses import dataclass
@@ -28,20 +28,19 @@ END_SLOP = 10  # bp a target alignment may stop short of a contig's ends, beyond
 @dataclass(frozen=True, slots=True)
 class CopyNumber:
     """
-    A locus's copy number. `estimate` comes from anchor depth; `low` and `high` are the lower and higher of it and the
-    anchor link count. `tiers` holds (copies, mean anchor depth) per depth tier. `fallback` is set when the hub had no
-    anchors and was measured against the genome's unique contigs instead. `hub` is the repeat hub's contigs, empty
-    for a locus in unique sequence; loci that share a hub share its copy number.
+    A locus's copy number. `estimate` comes from anchor depth; `edges` is the anchor link count, the links that reach
+    an anchor on both sides, halved (0 for a fallback). `tiers` holds (copies, mean anchor depth) per depth tier.
+    `fallback` is set when the hub had no anchors and was measured against the genome's unique contigs instead. `hub`
+    is the repeat hub's contigs, empty for a locus in unique sequence; loci that share a hub share its copy number.
     """
     estimate: int
-    low: int
-    high: int
+    edges: int
     tiers: tuple[tuple[int, float], ...] = ()  # for a fallback, (copies, baseline depth)
     fallback: bool = False
     hub: frozenset[str] = frozenset()
 
 
-UNIQUE = CopyNumber(1, 1, 1)
+UNIQUE = CopyNumber(1, 1)
 
 
 class WalkEndKind(StrEnum):
@@ -185,15 +184,15 @@ def _estimate(hub_depth: float, ends: dict[str, list[WalkEnd]], depths: dict[str
     A repeat hub's copy number from where the walks out of its two sides end. The estimate shares the hub's depth out
     over the depth tiers of its anchors, each tier weighted by the anchors it has on the side that reaches more of
     them, so with one tier it is hub depth over mean anchor depth, and a tier one side misses still gets its copy.
-    The check is the number of links to anchors, halved for the two sides. With no anchors, the estimate is hub depth
-    over `baseline()`, flagged as a fallback; there are no links to check it against, so it gives no range.
+    `edges` is the number of links to anchors, halved for the two sides. With no anchors, the estimate is hub depth
+    over `baseline()`, flagged as a fallback, and `edges` is 0.
     """
     anchors = {side: [depths[e.contig] for e in side_ends if e.kind == WalkEndKind.ANCHOR]
                for side, side_ends in ends.items()}
     if not any(anchors.values()):
         depth = baseline()
         estimate = max(1, _round_half_up(hub_depth / depth))
-        return CopyNumber(estimate, estimate, estimate, ((estimate, depth),), True, hub)
+        return CopyNumber(estimate, 0, ((estimate, depth),), True, hub)
     links = _round_half_up(sum(len(a) for a in anchors.values()) / 2)
     tiers = depth_tiers([d for side in anchors.values() for d in side])
     # (anchors on the side that reaches more of them, mean depth) per tier
@@ -201,4 +200,4 @@ def _estimate(hub_depth: float, ends: dict[str, list[WalkEnd]], depths: dict[str
     scale = hub_depth / sum(n * depth for n, depth in tier_anchors)
     tier_copies = tuple((max(1, _round_half_up(n * scale)), depth) for n, depth in tier_anchors)
     estimate = sum(copies for copies, _ in tier_copies)
-    return CopyNumber(estimate, min(links, estimate), max(links, estimate), tier_copies, False, hub)
+    return CopyNumber(estimate, links, tier_copies, False, hub)

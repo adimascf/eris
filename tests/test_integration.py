@@ -5,6 +5,7 @@ from pathlib import Path
 from eris.io import GenomeAssembly, TargetDatabase
 from eris.pipeline import Pipeline
 from eris.constants import FeatureType
+from eris.copy_number import CopyNumber
 from isoforms import read_isoform_groups
 from relation_scoring import GenePlacer, read_truth, report, score_relations
 
@@ -21,11 +22,12 @@ needs_data = pytest.mark.skipif(
     reason=f"integration data not found in {DATA_DIR}/",
 )
 
-def compute_metrics(truth_file: Path, eris_loci: list, groups: dict[str, str] | None = None, count: str = 'max'):
+def compute_metrics(truth_file: Path, eris_loci: list, groups: dict[str, str] | None = None, count: str = 'max',
+                    column: str = 'copy_number'):
     """
     Evaluates the IS element copy counts against the ground truth. See `count_copies` for the arguments.
     """
-    gt_counts, eris_counts = count_copies(truth_file, eris_loci, groups, count)
+    gt_counts, eris_counts = count_copies(truth_file, eris_loci, groups, count, column)
 
     # Calculate TP, FP, FN
     all_is = set(gt_counts.keys()).union(set(eris_counts.keys()))
@@ -51,7 +53,7 @@ def compute_metrics(truth_file: Path, eris_loci: list, groups: dict[str, str] | 
 
 
 def count_copies(truth_file: Path, eris_loci: list, groups: dict[str, str] | None = None,
-                 count: str = 'max') -> tuple[dict[str, int], dict[str, int]]:
+                 count: str = 'max', column: str = 'copy_number') -> tuple[dict[str, int], dict[str, int]]:
     """
     Returns the (truth, eris) IS copy counts, keyed by IS name.
 
@@ -63,6 +65,9 @@ def count_copies(truth_file: Path, eris_loci: list, groups: dict[str, str] | Non
     forgives a locus reported twice; 'sum' adds up every locus's copy number, as a user summing the report would;
     'hub' is 'sum' with each repeat hub counted once per group, a guard against near-identical names each
     reporting the same hub with the hub's copy number (#14). 'hub' needs `groups`.
+
+    `column` picks the report column a locus's copy number is read from: 'copy_number' (anchor depth) or
+    'copy_number_edges' (anchor link count).
     """
     # Parse Ground Truth
     gt_counts = {}
@@ -93,13 +98,14 @@ def count_copies(truth_file: Path, eris_loci: list, groups: dict[str, str] | Non
                 eris_loci_dict[is_name] = set()
             eris_loci_dict[is_name].add(locus.id)
 
-            # Track the max copy number depth estimate seen for this IS
-            eris_depth[is_name] = max(eris_depth.get(is_name, 0), int(locus.fractional_depth))
+            copies = int(locus.fractional_depth) if column == 'copy_number' else locus.copy_number.edges
+            # Track the max copy number estimate seen for this IS
+            eris_depth[is_name] = max(eris_depth.get(is_name, 0), copies)
             if count == 'hub' and (hub := locus.copy_number.hub):
                 if (groups.get(is_name, is_name), hub) in counted_hubs:
                     continue
                 counted_hubs.add((groups.get(is_name, is_name), hub))
-            eris_sum[is_name] = eris_sum.get(is_name, 0) + int(locus.fractional_depth)
+            eris_sum[is_name] = eris_sum.get(is_name, 0) + copies
 
     # Resolve Final Copy Counts for Eris
     eris_counts = {}
@@ -112,6 +118,17 @@ def count_copies(truth_file: Path, eris_loci: list, groups: dict[str, str] | Non
         gt_counts, eris_counts = _sum_by_group(gt_counts, groups), _sum_by_group(eris_counts, groups)
 
     return gt_counts, eris_counts
+
+
+def print_isoform_scores(truth_file: Path, eris_loci: list, groups: dict[str, str]) -> None:
+    """
+    Prints isoform-group P/R/F1 under each count for both copy-number columns. The benchmarks assert on copy_number
+    (anchor depth); copy_number_edges (anchor link count) is printed beside it to compare the two (#47).
+    """
+    for column in ('copy_number', 'copy_number_edges'):
+        for count in ('max', 'sum', 'hub'):
+            print(f"isoform {count} {column:<17} P=%.3f R=%.3f F1=%.3f"
+                  % compute_metrics(truth_file, eris_loci, groups, count, column))
 
 
 def find_overlapping_claims(eris_loci: list, groups: dict[str, str]) -> list[tuple[str, str, str]]:
@@ -197,10 +214,8 @@ def test_benchmark_precision_recall(benchmark, families, isoform_groups):
     # score per isoform group, and report exact names and IS families for reference.
     print("exact-name P=%.3f R=%.3f F1=%.3f" % compute_metrics(truth_file, loci))
     print("family hub P=%.3f R=%.3f F1=%.3f" % compute_metrics(truth_file, loci, families, count='hub'))
-    print("isoform max P=%.3f R=%.3f F1=%.3f" % compute_metrics(truth_file, loci, isoform_groups))
-    print("isoform sum P=%.3f R=%.3f F1=%.3f" % compute_metrics(truth_file, loci, isoform_groups, count='sum'))
+    print_isoform_scores(truth_file, loci, isoform_groups)
     precision, recall, f1 = compute_metrics(truth_file, loci, isoform_groups, count='hub')
-    print("isoform hub P=%.3f R=%.3f F1=%.3f" % (precision, recall, f1))
 
     # Score summed copy numbers, each hub once: the max-based count cannot see an IS reported twice
     assert f1 >= 0.94, f"Isoform F1 on summed copy numbers must be >= 0.94, got {f1:.3f}"
@@ -246,8 +261,8 @@ def test_real_reads_count_each_replicon_once(real_reads, families, isoform_group
     truth_file = DATA_DIR / REAL_READS[1]
     print("exact-name P=%.3f R=%.3f F1=%.3f" % compute_metrics(truth_file, real_reads))
     print("family hub P=%.3f R=%.3f F1=%.3f" % compute_metrics(truth_file, real_reads, families, count='hub'))
+    print_isoform_scores(truth_file, real_reads, isoform_groups)
     precision, recall, f1 = compute_metrics(truth_file, real_reads, isoform_groups, count='hub')
-    print("isoform hub P=%.3f R=%.3f F1=%.3f" % (precision, recall, f1))
     # Lower than the other assemblies: an IS629 copy offset a missed ISSen1 at family level (0.953) but not here
     assert f1 >= 0.93, f"Isoform F1 with each hub counted once must be >= 0.93, got {f1:.3f}"
 
@@ -296,6 +311,18 @@ def test_compute_metrics_isoform_level_merges_only_naming_swaps(tmp_path):
     truth.write_text("chr\t0\t1310\tISSen1\t0\t+\nchr\t5000\t6309\tIS629\t0\t-\n")
     extra = SimpleNamespace(id="locus_1", fractional_depth=2.0, targets=[SimpleNamespace(id="IS629_IS3_IS3")])
     assert compute_metrics(truth, [extra], groups=groups) == (0.5, 0.5, 0.5)
+
+
+def test_count_copies_scores_the_edge_count_when_asked(tmp_path):
+    # Anchor depth gives the hub 3 copies; the links reaching anchors give 2
+    truth = tmp_path / "truth.bed"
+    truth.write_text("".join(f"chr\t{i}000\t{i}768\tIS1A\t0\t+\n" for i in range(3)))
+    hub = SimpleNamespace(id="locus_1", fractional_depth=3.0, copy_number=CopyNumber(3, 2, hub=frozenset({"h"})),
+                          targets=[SimpleNamespace(id="IS1A_IS1_IS1")])
+
+    assert count_copies(truth, [hub], count='sum') == ({"IS1A": 3}, {"IS1A": 3})
+    assert count_copies(truth, [hub], count='sum', column='copy_number_edges') == ({"IS1A": 3}, {"IS1A": 2})
+    assert compute_metrics(truth, [hub], column='copy_number_edges') == (1.0, 2 / 3, 0.8)
 
 
 def test_find_overlapping_claims_flags_leftover_half_of_stitched_locus():

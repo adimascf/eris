@@ -236,9 +236,9 @@ class ReportRow:
         orientation: Strand orientation of the gene relative to the target (same or opposite).
         effect: Biological impact of the insertion on the gene (e.g., TRUNCATED, NONE).
         fractional_depth: The relative read depth of the variant path compared to the source contig, indicating sub-clonal abundance.
-            In collapse mode the column is copy_number instead, followed by copy_number_min, copy_number_max,
-            copy_tiers (copies@mean anchor depth per depth tier; copies@genome baseline depth for a fallback) and
-            copy_fallback, all taken from `copy_number`.
+            In collapse mode the column is copy_number (from anchor depth) instead, followed by copy_number_edges
+            (from the anchor link count; 0 for a fallback), copy_tiers (copies@mean anchor depth per depth tier;
+            copies@genome baseline depth for a fallback) and copy_fallback, all taken from `copy_number`.
         copy_number: The locus's copy number in collapse mode; None in variant mode.
     """
     locus_id: str
@@ -262,7 +262,7 @@ class ReportRow:
         # Swap the header text if we are calculating copy numbers
         if mode == 'collapse':
             fields[fields.index('fractional_depth')] = 'copy_number'
-            fields += ['copy_number_min', 'copy_number_max', 'copy_tiers', 'copy_fallback']
+            fields += ['copy_number_edges', 'copy_tiers', 'copy_fallback']
 
         return "\t".join(fields) + "\n"
 
@@ -272,7 +272,7 @@ class ReportRow:
         if (c := self.copy_number) is None:
             return f"{row}\t{self.fractional_depth}\n"
         tiers = ",".join(f"{n}@{depth:.1f}x" for n, depth in c.tiers)
-        return f"{row}\t{c.estimate}\t{c.low}\t{c.high}\t{tiers}\t{str(c.fallback).lower()}\n"
+        return f"{row}\t{c.estimate}\t{c.edges}\t{tiers}\t{str(c.fallback).lower()}\n"
 
 
 class OutputManager:
