@@ -28,10 +28,12 @@ def _batch(rows):
     )
 
 
-def _builder(lengths, edges=(), mode='variant', depths=None, intervals=None, max_feature_hops=0, **builder_args):
+def _builder(lengths, edges=(), mode='variant', depths=None, intervals=None, max_feature_hops=0, circular=frozenset(),
+             **builder_args):
     depths = depths if depths is not None else {c: 10.0 for c in lengths}
-    genome = GenomeAssembly("test", {c: Seq("A" * n) for c, n in lengths.items()}, list(edges), depths, lengths)
-    engine = TopologyEngine(list(edges), lengths, depths, features=intervals, mode=mode)
+    genome = GenomeAssembly("test", {c: Seq("A" * n) for c, n in lengths.items()}, list(edges), depths, lengths,
+                            frozenset(circular))
+    engine = TopologyEngine(list(edges), lengths, depths, features=intervals, mode=mode, circular=circular)
     return LocusBuilder(engine, genome, max_feature_hops=max_feature_hops, **builder_args)
 
 
@@ -221,3 +223,77 @@ def test_flank_two_links_away_counts_each_overlap_once():
     [locus] = builder.assemble(alignments)
 
     assert [(f.distance_bp, f.topological_dist) for f in locus.downstream_flanks] == [(550, 2)]
+
+
+def _circular_builder(length, gene_spans, overlap=0, hops=1):
+    """One circular contig 'chrom', closed by a self-link, carrying genes read on '+' at gene_spans."""
+    starts, ends = zip(*gene_spans)
+    intervals = {"chrom": IntervalBatch(np.array(starts), np.array(ends),
+                                        np.array([Strand.FORWARD] * len(gene_spans), dtype=np.int8))}
+    features = {"chrom": [GenomicFeature(f"gene_{s}", FeatureType.CDS, [LocationSegment("chrom", s, e, Strand.FORWARD)])
+                          for s, e in gene_spans]}
+    no_indels = {"chrom": [SimpleNamespace(insertions=[], deletions=[]) for _ in gene_spans]}
+    return _builder({"chrom": length}, [Edge("chrom", Strand.FORWARD, "chrom", Strand.FORWARD, overlap=overlap)],
+                    intervals=intervals, max_feature_hops=hops, features=features, genes=no_indels,
+                    circular={"chrom"})
+
+
+def _flank_genes(flanks):
+    return [(f.feature.id, f.distance_bp) for f in flanks]
+
+
+def test_a_gene_just_past_the_origin_flanks_a_target_at_the_end_of_a_circular_contig():
+    builder = _circular_builder(10000, [(300, 600), (5000, 5500)])
+    alignments = {"chrom": _batch([("IS1", 200, 0, 200, "chrom", 10000, 9800, 10000, 200, 200)])}
+
+    [locus] = builder.assemble(alignments)
+
+    assert _flank_genes(locus.downstream_flanks) == [("gene_300", 300)]
+    assert _flank_genes(locus.upstream_flanks) == [("gene_5000", 4300)]
+
+
+def test_a_gene_just_before_the_origin_flanks_a_target_at_the_start_of_a_circular_contig():
+    builder = _circular_builder(10000, [(300, 600), (5000, 5500)])
+    alignments = {"chrom": _batch([("IS1", 200, 0, 200, "chrom", 10000, 0, 200, 200, 200)])}
+
+    [locus] = builder.assemble(alignments)
+
+    assert _flank_genes(locus.upstream_flanks) == [("gene_5000", 4500)]
+    assert _flank_genes(locus.downstream_flanks) == [("gene_300", 100)]
+
+
+def test_a_flank_across_the_origin_counts_the_self_link_overlap_once():
+    # The contig's last 100 bp repeat its first 100 bp, so the gene at 300 sits 200 bp past the contig's end
+    builder = _circular_builder(10000, [(300, 600), (5000, 5500)], overlap=100)
+    alignments = {"chrom": _batch([("IS1", 200, 0, 200, "chrom", 10000, 9800, 10000, 200, 200)])}
+
+    [locus] = builder.assemble(alignments)
+
+    assert _flank_genes(locus.downstream_flanks) == [("gene_300", 200)]
+
+
+def test_a_walk_across_the_origin_stops_before_the_target_it_started_from():
+    # The only gene carries the target, so going round the circle finds no gene on either side of it
+    builder = _circular_builder(3000, [(1000, 2000)], hops=3)
+    alignments = {"chrom": _batch([("IS1", 300, 0, 300, "chrom", 3000, 1200, 1500, 300, 300)])}
+
+    [locus] = builder.assemble(alignments)
+
+    assert _flank_genes(locus.passengers) == [("gene_1000", 0)]
+    assert locus.upstream_flanks == locus.downstream_flanks == []
+
+
+def test_a_self_link_beside_other_links_is_not_walked_as_an_origin():
+    # 'rep' is a collapsed tandem repeat: its self-link is not a way back to its own start
+    intervals = {"rep": IntervalBatch(np.array([100]), np.array([400]), np.array([Strand.FORWARD], dtype=np.int8))}
+    features = {"rep": [GenomicFeature("gene_rep", FeatureType.CDS,
+                                       [LocationSegment("rep", 100, 400, Strand.FORWARD)])]}
+    no_indels = {"rep": [SimpleNamespace(insertions=[], deletions=[])]}
+    edges = [Edge("rep", Strand.FORWARD, "rep", Strand.FORWARD), Edge("ctgA", Strand.FORWARD, "rep", Strand.FORWARD)]
+    builder = _builder({"rep": 2000, "ctgA": 5000}, edges, intervals=intervals, max_feature_hops=1,
+                       features=features, genes=no_indels)
+    alignments = {"rep": _batch([("IS1", 200, 0, 200, "rep", 2000, 1800, 2000, 200, 200)])}
+
+    [locus] = builder.assemble(alignments)
+
+    assert locus.downstream_flanks == []

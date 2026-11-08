@@ -20,7 +20,7 @@ from mappy import Aligner
 from pyfgs import FaaWriter, FnaWriter, Gff3Writer
 
 from eris.alignment import Cigar
-from eris.graph import Edge
+from eris.graph import Edge, circular_contigs
 from eris.interval import Strand
 from eris.constants import FeatureType
 from eris.copy_number import CopyNumber, UNIQUE
@@ -166,6 +166,7 @@ class GenomeAssembly:
     edges: list[Edge]
     contig_depths: dict[str, float]
     contig_lengths: dict[str, int]
+    circular: frozenset[str] = frozenset()
 
     def __len__(self):
         """Total number of base pairs in the assembly."""
@@ -206,16 +207,26 @@ class GenomeAssembly:
 
     @classmethod
     def from_stream(cls, handle: IO[str], reader, id_: str = None):
-        """Load an assembly from an open file stream using the specified reader."""
+        """
+        Load an assembly from an open file stream using the specified reader.
+
+        A contig is circular when its FASTA header says `circular=true` or its only link is a self-link (ADR 0001).
+        A tagged contig gets a self-link, so FASTA and GFA input reach the assembly graph the same way. Only FASTA
+        headers carry the tag, and FASTA has no links, so that self-link is the tagged contig's only link.
+        """
         contigs, edges, depths, lengths = {}, [], {}, {}
+        tagged: list[str] = []
         for record in reader(handle):
             if isinstance(record, SeqRecord):
                 contigs[record.id] = record.seq
                 depths[record.id] = record.annotations.get('DP', record.annotations.get('depth', 1.0))
                 lengths[record.id] =  len(record)
+                if 'circular=true' in record.description.lower().split():
+                    tagged.append(str(record.id))
             elif isinstance(record, Edge):
                 edges.append(record)
-        return cls(id_ or handle.name, contigs, edges, depths, lengths)
+        edges += [Edge(c, Strand.FORWARD, c, Strand.FORWARD) for c in tagged]
+        return cls(id_ or handle.name, contigs, edges, depths, lengths, circular_contigs(edges))
 
 
 @dataclass(slots=True, frozen=True)
