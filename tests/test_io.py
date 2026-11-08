@@ -81,3 +81,40 @@ def test_variant_report_keeps_fractional_depth_as_its_last_column(tmp_path):
     row = _report(tmp_path, locus, 'variant')
 
     assert list(row)[-1] == "fractional_depth" and row["fractional_depth"] == "0.5"
+
+
+def _assembly(text, reader):
+    from io import StringIO
+    from eris.io import GenomeAssembly
+    return GenomeAssembly.from_stream(StringIO(text), reader, "test")
+
+
+def test_fasta_header_tag_marks_a_contig_circular_and_closes_it_with_a_self_link():
+    from Bio.SeqIO.FastaIO import FastaIterator
+    from eris.graph import Edge
+    genome = _assembly(">chrom length=5000 circular=true\nACGT\n>frag\nACGT\n", FastaIterator)
+
+    assert genome.circular == {"chrom"}
+    assert genome.edges == [Edge("chrom", Strand.FORWARD, "chrom", Strand.FORWARD, 0)]
+
+
+def test_an_isolated_gfa_self_link_marks_a_contig_circular():
+    from eris.io import GfaReader
+    # Written on the reverse strand, as SPAdes does: the same link as 'plasmid+ -> plasmid+'
+    genome = _assembly("S\tplasmid\tACGTACGT\nL\tplasmid\t-\tplasmid\t-\t3M\n", GfaReader)
+
+    assert genome.circular == {"plasmid"}
+
+
+def test_a_gfa_self_link_alongside_other_links_is_a_collapsed_repeat_not_a_circular_contig():
+    from eris.io import GfaReader
+    genome = _assembly("S\trep\tACGT\nS\tctgA\tACGT\nL\trep\t+\trep\t+\t0M\nL\tctgA\t+\trep\t+\t0M\n", GfaReader)
+
+    assert genome.circular == frozenset()
+
+
+def test_a_hairpin_link_does_not_mark_a_contig_circular():
+    from eris.io import GfaReader
+    genome = _assembly("S\tctgA\tACGT\nL\tctgA\t+\tctgA\t-\t0M\n", GfaReader)
+
+    assert genome.circular == frozenset()

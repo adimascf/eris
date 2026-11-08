@@ -300,6 +300,19 @@ class LocusBuilder:
             topological_dist=topo, orientation=orientation, effect=effect
         )
 
+    @staticmethod
+    def _before_target_across_origin(intervals: 'IntervalBatch', original_index: int, walk_direction: int,
+                                     target_bounds: tuple[int, int]) -> bool:
+        """
+        Whether a gene that a walk reaches back on its own contig, across the origin of a circular contig, lies
+        wholly before the target in the walk's direction. Going any further round the circle would reach the target
+        itself. On a circle with few genes, a gene can still flank the target on both sides.
+        """
+        j = int(np.flatnonzero(intervals.original_indices == original_index)[0])
+        if walk_direction == 1:
+            return bool(intervals.ends[j] <= target_bounds[0])
+        return bool(intervals.starts[j] >= target_bounds[1])
+
     def _extract_flanks(self, contig: str, boundary: int, walk_direction: int,
                         context: Context, intervals: Optional['IntervalBatch'], dest_list: list,
                         target_strand: Strand, target_bounds: tuple[int, int]):
@@ -327,7 +340,12 @@ class LocusBuilder:
         # 2. Graph Spillover
         if rem_hops > 0:
             for s_ctg, node_depth, batch in self.topology_engine.traverse(contig, exit_strand, rem_hops):
+                across_origin = s_ctg == contig and contig in self.topology_engine.circular
                 for i in range(len(batch)):
+                    if across_origin and not self._before_target_across_origin(
+                            self.topology_engine.features[contig], batch.original_indices[i], walk_direction,
+                            target_bounds):
+                        continue
                     if walk_direction == -1:
                         d = max(0, boundary + batch.starts[i] - self.genome.contig_lengths[contig])
                     else:
@@ -558,7 +576,8 @@ class Pipeline:
             contig_lengths=genome.contig_lengths,
             contig_depths=genome.contig_depths,
             features=gene_intervals,
-            mode=self.mode)
+            mode=self.mode,
+            circular=genome.circular)
 
         builder = LocusBuilder(
             topology_engine=topology_engine,

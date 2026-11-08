@@ -37,6 +37,26 @@ class Edge(NamedTuple):
         return Edge(self.v, Strand(-self.v_strand), self.u, Strand(-self.u_strand), self.overlap)
 
 
+def is_self_link(edge: Edge) -> bool:
+    """Returns whether the link joins a contig's end back to its own start: 'A+ -> A+', or the same as 'A- -> A-'."""
+    return edge.u == edge.v and edge.u_strand == edge.v_strand
+
+
+def circular_contigs(edges: Iterable[Edge]) -> frozenset[str]:
+    """
+    Contigs whose only link is a self-link (ADR 0001). A self-link alongside links to other contigs is a collapsed
+    repeat, not a closed replicon, and a hairpin ('A+ -> A-') joins an end to itself, not to the start.
+    """
+    self_linked: set[str] = set()
+    linked_elsewhere: set[str] = set()
+    for edge in edges:
+        if is_self_link(edge):
+            self_linked.add(edge.u)
+        else:
+            linked_elsewhere.update((edge.u, edge.v))
+    return frozenset(self_linked - linked_elsewhere)
+
+
 class Graph:
     """
     Manages an assembly graph, supporting both directed and undirected traversal.
@@ -132,10 +152,11 @@ class TopologyEngine:
     It provides tools for "stitching" together partial alignments that span
     multiple contigs by finding valid physical paths through the graph.
     """
-    __slots__ = ('_graph', 'contig_lengths', 'contig_depths', 'features', '_visited_nodes', 'mode', '_end_overlap')
+    __slots__ = ('_graph', 'contig_lengths', 'contig_depths', 'features', '_visited_nodes', 'mode', '_end_overlap',
+                 'circular')
 
     def __init__(self, edges: Iterable[Edge], contig_lengths: dict[str, int], contig_depths: dict[str, float],
-                 features: dict[str, IntervalBatch] = None, mode: str = 'variant'):
+                 features: dict[str, IntervalBatch] = None, mode: str = 'variant', circular: Iterable[str] = ()):
         """
         Initialize the TopologyEngine.
 
@@ -144,6 +165,8 @@ class TopologyEngine:
             contig_lengths: Dictionary mapping contig ID to length in bp.
             contig_depths: Dictionary mapping contig ID to read depth.
             features: Dictionary mapping contig ID to its annotated intervals.
+            mode: 'variant' or 'collapse'.
+            circular: Circular contigs, each closed by a self-link among `edges` (ADR 0001).
         """
         # A GFA link is written once but holds on both strands, so add its complement for walking the other way
         edges = list(edges)
@@ -157,6 +180,7 @@ class TopologyEngine:
         self.contig_depths: dict[str, float] = contig_depths
         self.features: dict[str, IntervalBatch] = features or {}
         self._visited_nodes: set[tuple[str, int]] = set()
+        self.circular: frozenset[str] = frozenset(circular)
 
         self.mode: str = mode
 
@@ -533,6 +557,7 @@ class TopologyEngine:
         projected_results = []
         visited_edges = {(start_node, exit_strand)}
         per_branch = self.mode == 'collapse'
+        wrapped = False
 
         while queue:
             curr_ctg, curr_exit, parent_hops, node_depth, shift = queue.pop(0)
@@ -544,7 +569,11 @@ class TopologyEngine:
                 if per_branch: rem_hops = parent_hops
 
                 v = edge.v
-                if (v, edge.v_strand) in visited_edges: continue
+                # The self-link of a circular contig leads back to its start across the origin: go round it once
+                if v in self.circular and is_self_link(edge) and not wrapped:
+                    wrapped = True
+                elif (v, edge.v_strand) in visited_edges:
+                    continue
                 visited_edges.add((v, edge.v_strand))
                 # Linked contigs share the edge overlap, so the next contig starts that much before this one ends
                 new_shift = shift + self.contig_lengths[curr_ctg] - edge.overlap
