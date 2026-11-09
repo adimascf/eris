@@ -70,7 +70,7 @@ def describe_input(genome: 'GenomeAssembly') -> tuple[str, list[str]]:
                         "Give the assembler's GFA file to rebuild targets split across contigs.")
     if not genome.has_depth:
         warnings.append("Read depth (a DP, dp or depth tag) is missing from some or all contigs: "
-                        "fractional_depth and copy_number are reported as NA.")
+                        "fractional_depth, and copy_number of loci in repeat hubs, are reported as NA.")
     return summary, warnings
 
 

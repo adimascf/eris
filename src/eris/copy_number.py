@@ -32,7 +32,7 @@ class CopyNumber:
     an anchor on both sides, halved (0 for a fallback). `tiers` holds (copies, mean anchor depth) per depth tier.
     `fallback` is set when the hub had no anchors and was measured against the genome's unique contigs instead. `hub`
     is the repeat hub's contigs, empty for a locus in unique sequence; loci that share a hub share its copy number.
-    `estimate` is None when the assembly has no read depth, so only `edges` was measured.
+    A hub's `estimate` is None when the assembly has no read depth, so only `edges` was measured.
     """
     estimate: Optional[int]
     edges: int
@@ -41,8 +41,7 @@ class CopyNumber:
     hub: frozenset[str] = frozenset()
 
 
-UNIQUE = CopyNumber(1, 1)
-UNIQUE_WITHOUT_DEPTH = CopyNumber(None, 1)
+UNIQUE = CopyNumber(1, 1)  # a locus in unique sequence is one copy, with or without read depth
 
 
 class WalkEndKind(StrEnum):
@@ -64,14 +63,15 @@ class WalkEnd(NamedTuple):
 def assign_copy_numbers(loci: list['Locus'], genome: 'GenomeAssembly') -> None:
     """
     Sets each locus's copy number, and its `fractional_depth`, which the report prints as copy_number. Without read
-    depth only the anchor link count is set; the estimate and `fractional_depth` are None.
+    depth a repeat hub gets only its anchor link count; its estimate and `fractional_depth` are None. A locus in
+    unique sequence is one copy either way.
     """
     overlap = max((e.overlap for e in genome.edges), default=0)
     hubs = _merge_hubs([_hub(locus, genome.contig_lengths, overlap) for locus in loci])
     repeats = {contig for hub, _ in hubs for contig in hub}
     graph = Graph(genome.edges + [e.complement() for e in genome.edges])
     for hub, members in hubs:
-        copies = UNIQUE if genome.has_depth else UNIQUE_WITHOUT_DEPTH
+        copies = UNIQUE
         if hub:
             ends = _walk_out(graph, hub, genome.contig_lengths, repeats - hub.keys())
             if genome.has_depth:

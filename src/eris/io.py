@@ -275,7 +275,8 @@ class ReportRow:
             In collapse mode the column is copy_number (from anchor depth) instead, followed by copy_number_edges
             (from the anchor link count; 0 for a fallback), copy_tiers (copies@mean anchor depth per depth tier;
             copies@genome baseline depth for a fallback) and copy_fallback, all taken from `copy_number`.
-            NA when the assembly has no read depth; copy_number_edges is still given.
+            Without read depth, fractional_depth is NA, and so are a repeat hub's copy_number, copy_tiers and
+            copy_fallback; copy_number_edges is still given, and a locus in unique sequence is still 1 copy.
         copy_number: The locus's copy number in collapse mode; None in variant mode.
     """
     locus_id: str
@@ -308,7 +309,7 @@ class ReportRow:
         row = f"{self.locus_id}\t{self.target}\t{self.target_identity}\t{self.contig_path}\t{self.gene_id}\t{self.context}\t{self.dist_bp}\t{self.topo_hops}\t{self.orientation}\t{self.effect}"
         if (c := self.copy_number) is None:
             return f"{row}\t{_or_na(self.fractional_depth)}\n"
-        if c.estimate is None:  # The assembly has no depth, so only the link count was measured
+        if c.estimate is None:  # A repeat hub in an assembly without depth: only the link count was measured
             return f"{row}\tNA\t{c.edges}\tNA\tNA\n"
         tiers = ",".join(f"{n}@{depth:.1f}x" for n, depth in c.tiers)
         return f"{row}\t{c.estimate}\t{c.edges}\t{tiers}\t{str(c.fallback).lower()}\n"

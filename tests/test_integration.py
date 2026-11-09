@@ -127,8 +127,6 @@ def print_isoform_scores(truth_file: Path, eris_loci: list, groups: dict[str, st
     (anchor depth); copy_number_edges (anchor link count) is printed beside it to compare the two (#47).
     """
     for column in ('copy_number', 'copy_number_edges'):
-        if column == 'copy_number' and any(locus.fractional_depth is None for locus in eris_loci):
-            continue  # The assembly has no read depth, so copy_number is NA
         for count in ('max', 'sum', 'hub'):
             print(f"isoform {count} {column:<17} P=%.3f R=%.3f F1=%.3f"
                   % compute_metrics(truth_file, eris_loci, groups, count, column))
@@ -186,12 +184,12 @@ def isoform_groups():
 
 # User mentioned EC958.fasta but that file only contains the chromosome.
 # The actual complete genome (chromosome + plasmids) is EC958_complete_genome.fasta.
-# The third field is the report column scored. FASTA input has no read depth, so the complete genome's copy_number is
-# NA; it is scored on copy_number_edges, which is 1 for every locus in unique sequence, as every locus there is.
+# The complete genome is FASTA, so it has no read depth: its copy numbers stand because every locus on it is in
+# unique sequence (one copy), and no repeat hub needs depth to be counted.
 BENCHMARKS = {
-    "complete": ("EC958_complete_genome.fasta", "complete_ec958_IS.reanotated.sorted.bed", "copy_number_edges"),
+    "complete": ("EC958_complete_genome.fasta", "complete_ec958_IS.reanotated.sorted.bed"),
     # Fragmented graphs are incredibly messy, but eris should still achieve >85% recovery
-    "fragmented": ("contigs_shovill_simulated.gfa", "ec958_IS.reannotated.sorted.bed", "copy_number"),
+    "fragmented": ("contigs_shovill_simulated.gfa", "ec958_IS.reannotated.sorted.bed"),
 }
 
 # Isoform groups whose summed copy count is still wrong, as {group: (truth, eris)}. Every other group must match the
@@ -204,23 +202,23 @@ KNOWN_COUNT_ERRORS = {
 
 @pytest.fixture(scope="module", params=BENCHMARKS)
 def benchmark(request, target_db):
-    genome_file, truth_file, column = BENCHMARKS[request.param]
+    genome_file, truth_file = BENCHMARKS[request.param]
     # max_feature_hops=0 completely disables the PyFGS gene calling for extreme speed
     with Pipeline(target_db, max_feature_hops=0, mode='collapse', min_coverage=0.30) as pipeline:
         loci = list(pipeline(GenomeAssembly.from_file(DATA_DIR / genome_file)))
-    return request.param, DATA_DIR / truth_file, loci, column
+    return request.param, DATA_DIR / truth_file, loci
 
 
 @needs_data
 def test_benchmark_precision_recall(benchmark, families, isoform_groups):
-    _, truth_file, loci, column = benchmark
+    _, truth_file, loci = benchmark
 
     # Isoforms (e.g., IS1A vs IS1R) cross-map heavily in nucleotide space, so exact name matches are impossible;
     # score per isoform group, and report exact names and IS families for reference.
-    print("exact-name P=%.3f R=%.3f F1=%.3f" % compute_metrics(truth_file, loci, column=column))
-    print("family hub P=%.3f R=%.3f F1=%.3f" % compute_metrics(truth_file, loci, families, count='hub', column=column))
+    print("exact-name P=%.3f R=%.3f F1=%.3f" % compute_metrics(truth_file, loci))
+    print("family hub P=%.3f R=%.3f F1=%.3f" % compute_metrics(truth_file, loci, families, count='hub'))
     print_isoform_scores(truth_file, loci, isoform_groups)
-    precision, recall, f1 = compute_metrics(truth_file, loci, isoform_groups, count='hub', column=column)
+    precision, recall, f1 = compute_metrics(truth_file, loci, isoform_groups, count='hub')
 
     # Score summed copy numbers, each hub once: the max-based count cannot see an IS reported twice
     assert f1 >= 0.94, f"Isoform F1 on summed copy numbers must be >= 0.94, got {f1:.3f}"
@@ -229,8 +227,8 @@ def test_benchmark_precision_recall(benchmark, families, isoform_groups):
 @needs_data
 def test_benchmark_isoform_copy_counts_do_not_regress(benchmark, isoform_groups):
     # The F1 threshold hides a single double-counted IS (issue #1 scored 0.857); compare each isoform group instead
-    name, truth_file, loci, column = benchmark
-    gt_counts, eris_counts = count_copies(truth_file, loci, isoform_groups, count='sum', column=column)
+    name, truth_file, loci = benchmark
+    gt_counts, eris_counts = count_copies(truth_file, loci, isoform_groups, count='sum')
     known = KNOWN_COUNT_ERRORS[name]
 
     worse = {}
@@ -244,7 +242,7 @@ def test_benchmark_isoform_copy_counts_do_not_regress(benchmark, isoform_groups)
 
 @needs_data
 def test_benchmark_reports_each_copy_once(benchmark, isoform_groups):
-    _, _, loci, _ = benchmark
+    _, _, loci = benchmark
     assert find_overlapping_claims(loci, isoform_groups) == []
 
 

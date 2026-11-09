@@ -125,7 +125,7 @@ def test_loci_that_share_a_hub_share_its_copy_number():
     assert loci[0].copy_number.hub == frozenset({"h1", "h2"})
 
 
-def test_without_depth_a_hub_keeps_its_link_count_but_has_no_copy_number():
+def test_without_depth_a_hub_keeps_its_link_count_but_has_no_copy_number_and_a_unique_locus_is_one_copy():
     contigs, edges = hub_with_anchors("hub", [30, 75], [32, 78])
     lengths = {"hub": 768, **{c: n for c, (n, _) in contigs.items()}}
     no_depth = GenomeAssembly("test", {c: Seq("A" * n) for c, n in lengths.items()}, edges, {}, lengths)
@@ -135,5 +135,5 @@ def test_without_depth_a_hub_keeps_its_link_count_but_has_no_copy_number():
 
     hub, unique = loci[0].copy_number, loci[1].copy_number
     assert (hub.estimate, hub.edges, hub.tiers) == (None, 2, ())
-    assert (unique.estimate, unique.edges) == (None, 1)
-    assert [l.fractional_depth for l in loci] == [None, None]
+    assert (unique.estimate, unique.edges) == (1, 1)
+    assert [l.fractional_depth for l in loci] == [None, 1.0]
