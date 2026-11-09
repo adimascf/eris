@@ -118,3 +118,57 @@ def test_a_hairpin_link_does_not_mark_a_contig_circular():
     genome = _assembly("S\tctgA\tACGT\nL\tctgA\t+\tctgA\t-\t0M\n", GfaReader)
 
     assert genome.circular == frozenset()
+
+
+# Depth tags -----------------------------------------------------------------------------------------------------------
+def test_gfa_dp_tags_from_flye_and_unicycler_are_read_as_depth():
+    from eris.io import GfaReader
+    genome = _assembly("S\tctgA\tACGT\tdp:i:30\nS\tctgB\tACGT\tdp:f:12.5\n", GfaReader)
+
+    assert genome.has_depth and genome.contig_depths == {"ctgA": 30, "ctgB": 12.5}
+
+
+def test_gfa_uppercase_dp_and_depth_tags_are_read_as_depth():
+    from eris.io import GfaReader
+    genome = _assembly("S\tctgA\tACGT\tDP:f:30.0\nS\tctgB\tACGT\tdepth:f:12.5\n", GfaReader)
+
+    assert genome.contig_depths == {"ctgA": 30.0, "ctgB": 12.5}
+
+
+def test_kmer_count_is_not_read_as_depth():
+    from eris.io import GfaReader
+    genome = _assembly("S\tctgA\tACGT\tKC:i:108\n", GfaReader)
+
+    assert not genome.has_depth and genome.contig_depths == {}
+
+
+def test_depth_tags_on_only_some_contigs_leave_the_assembly_without_depth():
+    from eris.io import GfaReader
+    genome = _assembly("S\tctgA\tACGT\tdp:i:30\nS\tctgB\tACGT\n", GfaReader)
+
+    assert not genome.has_depth and genome.contig_depths == {}
+
+
+def test_fasta_input_has_no_depth_and_no_assembly_graph():
+    from Bio.SeqIO.FastaIO import FastaIterator
+    genome = _assembly(">ctgA\nACGT\n", FastaIterator)
+
+    assert not genome.has_depth and not genome.has_graph
+
+
+def test_variant_report_gives_na_for_a_fractional_depth_that_was_not_measured(tmp_path):
+    locus = _locus("locus_1", ("ctgA", 0, 768, Strand.FORWARD))
+    locus.fractional_depth = None
+
+    assert _report(tmp_path, locus, 'variant')["fractional_depth"] == "NA"
+
+
+def test_collapse_report_gives_na_for_a_copy_number_that_was_not_measured(tmp_path):
+    locus = _locus("locus_1", ("hub", 0, 768, Strand.FORWARD))
+    locus.copy_number = CopyNumber(None, 2, hub=frozenset({"hub"}))
+    locus.fractional_depth = None
+
+    row = _report(tmp_path, locus, 'collapse')
+
+    assert {k: row[k] for k in list(row)[-4:]} == {
+        "copy_number": "NA", "copy_number_edges": "2", "copy_tiers": "NA", "copy_fallback": "NA"}

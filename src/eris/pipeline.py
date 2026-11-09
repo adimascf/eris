@@ -130,7 +130,7 @@ class Locus:
     passengers: list['FeatureRelation']
     upstream_flanks: list['FeatureRelation']
     downstream_flanks: list['FeatureRelation']
-    fractional_depth: float = 1.0  # Fractional depth in variant mode, copy number in collapse mode
+    fractional_depth: Optional[float] = 1.0  # Fractional depth in variant mode, copy number in collapse; None: no depth
     copy_number: Optional[CopyNumber] = None  # Collapse mode only
 
     def extract_sequence(self, genome: 'GenomeAssembly') -> str:
@@ -381,7 +381,8 @@ class LocusBuilder:
             # Collapse mode's copy number is set once every locus is built (see assign_copy_numbers)
             locus = Locus(
                 id=f"locus_{uuid4().hex[:8]}", contig=contig, start=macro.start, end=macro.end,
-                targets=target_features, passengers=[], upstream_flanks=[], downstream_flanks=[]
+                targets=target_features, passengers=[], upstream_flanks=[], downstream_flanks=[],
+                fractional_depth=1.0 if self.genome.has_depth else None
             )
 
             # Determine macro target context bounds
@@ -417,6 +418,8 @@ class LocusBuilder:
 
         if getattr(self.topology_engine, 'mode', 'variant') == 'collapse':
             metric_val = 1.0  # Copy number is set once every locus is built (see assign_copy_numbers)
+        elif not self.genome.has_depth:
+            metric_val = None
         else:
             # Calculate the fractional flow of the stitched path
             source_depth = self.genome.contig_depths.get(first.t_name, 1.0)

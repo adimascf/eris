@@ -297,3 +297,18 @@ def test_a_self_link_beside_other_links_is_not_walked_as_an_origin():
     [locus] = builder.assemble(alignments)
 
     assert locus.downstream_flanks == []
+
+
+@pytest.mark.parametrize("depths, expected", [(None, 1.0), ({}, None)])
+def test_fractional_depth_is_none_when_the_assembly_has_no_depth(depths, expected):
+    edges = [Edge("ctgA", Strand.FORWARD, "ctgB", Strand.FORWARD, overlap=0)]
+    builder = _builder({"ctgA": 1000, "ctgB": 1000, "ctgC": 5000}, edges, depths=depths)
+    alignments = {
+        "ctgA": _batch([("IS1", 1000, 0, 500, "ctgA", 1000, 500, 1000, 500, 500)]),
+        "ctgB": _batch([("IS1", 1000, 500, 1000, "ctgB", 1000, 0, 500, 500, 500)]),
+        "ctgC": _batch([("IS2", 1000, 0, 1000, "ctgC", 5000, 1000, 2000, 1000, 1000)]),
+    }
+
+    loci = list(builder.assemble(alignments, min_coverage=0.30))
+
+    assert len(loci) == 2 and {locus.fractional_depth for locus in loci} == {expected}
