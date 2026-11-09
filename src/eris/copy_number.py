@@ -8,7 +8,7 @@ anchor gives a second count, reported beside it so the two can be compared.
 import math
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Callable, NamedTuple, TYPE_CHECKING
+from typing import Callable, NamedTuple, Optional, TYPE_CHECKING
 
 from eris.graph import Edge, Graph
 from eris.interval import Strand
@@ -32,15 +32,16 @@ class CopyNumber:
     an anchor on both sides, halved (0 for a fallback). `tiers` holds (copies, mean anchor depth) per depth tier.
     `fallback` is set when the hub had no anchors and was measured against the genome's unique contigs instead. `hub`
     is the repeat hub's contigs, empty for a locus in unique sequence; loci that share a hub share its copy number.
+    A hub's `estimate` is None when the assembly has no read depth, so only `edges` was measured.
     """
-    estimate: int
+    estimate: Optional[int]
     edges: int
     tiers: tuple[tuple[int, float], ...] = ()  # for a fallback, (copies, baseline depth)
     fallback: bool = False
     hub: frozenset[str] = frozenset()
 
 
-UNIQUE = CopyNumber(1, 1)
+UNIQUE = CopyNumber(1, 1)  # a locus in unique sequence is one copy, with or without read depth
 
 
 class WalkEndKind(StrEnum):
@@ -60,7 +61,11 @@ class WalkEnd(NamedTuple):
 
 # Functions ------------------------------------------------------------------------------------------------------------
 def assign_copy_numbers(loci: list['Locus'], genome: 'GenomeAssembly') -> None:
-    """Sets each locus's copy number, and its `fractional_depth`, which the report prints as copy_number."""
+    """
+    Sets each locus's copy number, and its `fractional_depth`, which the report prints as copy_number. Without read
+    depth a repeat hub gets only its anchor link count; its estimate and `fractional_depth` are None. A locus in
+    unique sequence is one copy either way.
+    """
     overlap = max((e.overlap for e in genome.edges), default=0)
     hubs = _merge_hubs([_hub(locus, genome.contig_lengths, overlap) for locus in loci])
     repeats = {contig for hub, _ in hubs for contig in hub}
@@ -69,12 +74,15 @@ def assign_copy_numbers(loci: list['Locus'], genome: 'GenomeAssembly') -> None:
         copies = UNIQUE
         if hub:
             ends = _walk_out(graph, hub, genome.contig_lengths, repeats - hub.keys())
-            hub_depth = max(genome.contig_depths[c] for c in hub)
-            copies = _estimate(hub_depth, ends, genome.contig_depths, frozenset(hub),
-                               lambda: _baseline_depth(genome, repeats))
+            if genome.has_depth:
+                hub_depth = max(genome.contig_depths[c] for c in hub)
+                copies = _estimate(hub_depth, ends, genome.contig_depths, frozenset(hub),
+                                   lambda: _baseline_depth(genome, repeats))
+            else:
+                copies = CopyNumber(None, _anchor_links(ends), hub=frozenset(hub))
         for i in members:
             loci[i].copy_number = copies
-            loci[i].fractional_depth = float(copies.estimate)
+            loci[i].fractional_depth = None if copies.estimate is None else float(copies.estimate)
 
 
 def depth_tiers(depths: list[float], tolerance: float = TIER_TOLERANCE) -> list[list[float]]:
@@ -173,6 +181,11 @@ def _baseline_depth(genome: 'GenomeAssembly', repeats: set[str]) -> float:
     return sum(genome.contig_depths[c] * genome.contig_lengths[c] for c in contigs) / total if total else 1.0
 
 
+def _anchor_links(ends: dict[str, list[WalkEnd]]) -> int:
+    """The number of links from a repeat hub that reach an anchor, halved for its two sides."""
+    return _round_half_up(sum(e.kind == WalkEndKind.ANCHOR for side in ends.values() for e in side) / 2)
+
+
 def _round_half_up(x: float) -> int:
     """Rounds .5 up, where Python's round() goes to the even neighbour (2.5 would give 2)."""
     return math.floor(x + 0.5)
@@ -193,7 +206,7 @@ def _estimate(hub_depth: float, ends: dict[str, list[WalkEnd]], depths: dict[str
         depth = baseline()
         estimate = max(1, _round_half_up(hub_depth / depth))
         return CopyNumber(estimate, 0, ((estimate, depth),), True, hub)
-    links = _round_half_up(sum(len(a) for a in anchors.values()) / 2)
+    links = _anchor_links(ends)
     tiers = depth_tiers([d for side in anchors.values() for d in side])
     # (anchors on the side that reaches more of them, mean depth) per tier
     tier_anchors = [(max(sum(d in t for d in side) for side in anchors.values()), sum(t) / len(t)) for t in tiers]

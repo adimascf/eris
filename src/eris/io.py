@@ -161,12 +161,29 @@ class GenomeAssembly:
         r')\.?(?P<compression>(gz|bz2|xz))?$'
     )
     _OPENERS = {'gz': gzopen, 'bz2': bzopen, 'xz': lzopen}
+    _DEPTH_TAGS = ('DP', 'dp', 'depth')  # SPAdes/Shovill, Flye/Unicycler, other; KC is a k-mer count, not depth
     id: str
     contigs: dict[str, Seq]
     edges: list[Edge]
     contig_depths: dict[str, float]
     contig_lengths: dict[str, int]
     circular: frozenset[str] = frozenset()
+    has_graph: bool = True  # False for FASTA input, which carries no links between contigs
+
+    @property
+    def has_depth(self) -> bool:
+        """True if every contig has a read depth. `from_stream` keeps no depth at all when any contig lacks one."""
+        return bool(self.contigs) and self.contig_depths.keys() >= self.contigs.keys()
+
+    @property
+    def is_complete(self) -> bool:
+        """True if the assembly is a complete genome: every contig is circular."""
+        return bool(self.contigs) and self.circular >= self.contigs.keys()
+
+    @property
+    def link_count(self) -> int:
+        """The number of links in the assembly graph; 0 for FASTA input, whose self-links stand in for circular tags."""
+        return len(self.edges) if self.has_graph else 0
 
     def __len__(self):
         """Total number of base pairs in the assembly."""
@@ -213,20 +230,28 @@ class GenomeAssembly:
         A contig is circular when its FASTA header says `circular=true` or its only link is a self-link (ADR 0001).
         A tagged contig gets a self-link, so FASTA and GFA input reach the assembly graph the same way. Only FASTA
         headers carry the tag, and FASTA has no links, so that self-link is the tagged contig's only link.
+
+        Read depth comes from a `DP`, `dp` or `depth` tag. It is kept only if every contig has one: a depth missing
+        from some contigs is never filled in, so the assembly then has no depth at all.
         """
         contigs, edges, depths, lengths = {}, [], {}, {}
         tagged: list[str] = []
         for record in reader(handle):
             if isinstance(record, SeqRecord):
                 contigs[record.id] = record.seq
-                depths[record.id] = record.annotations.get('DP', record.annotations.get('depth', 1.0))
+                if (depth := next((record.annotations[t] for t in cls._DEPTH_TAGS if t in record.annotations),
+                                  None)) is not None:
+                    depths[record.id] = float(depth)
                 lengths[record.id] =  len(record)
                 if 'circular=true' in record.description.lower().split():
                     tagged.append(str(record.id))
             elif isinstance(record, Edge):
                 edges.append(record)
         edges += [Edge(c, Strand.FORWARD, c, Strand.FORWARD) for c in tagged]
-        return cls(id_ or handle.name, contigs, edges, depths, lengths, circular_contigs(edges))
+        if depths.keys() < contigs.keys():
+            depths = {}
+        return cls(id_ or handle.name, contigs, edges, depths, lengths, circular_contigs(edges),
+                   has_graph=reader is not FastaIterator)
 
 
 @dataclass(slots=True, frozen=True)
@@ -250,6 +275,8 @@ class ReportRow:
             In collapse mode the column is copy_number (from anchor depth) instead, followed by copy_number_edges
             (from the anchor link count; 0 for a fallback), copy_tiers (copies@mean anchor depth per depth tier;
             copies@genome baseline depth for a fallback) and copy_fallback, all taken from `copy_number`.
+            Without read depth, fractional_depth is NA, and so are a repeat hub's copy_number, copy_tiers and
+            copy_fallback; copy_number_edges is still given, and a locus in unique sequence is still 1 copy.
         copy_number: The locus's copy number in collapse mode; None in variant mode.
     """
     locus_id: str
@@ -262,7 +289,7 @@ class ReportRow:
     topo_hops: int
     orientation: str
     effect: str
-    fractional_depth: float
+    fractional_depth: Optional[float]
     copy_number: Optional[CopyNumber] = None
 
     @classmethod
@@ -281,7 +308,9 @@ class ReportRow:
         """Formats the row data into a tab-separated string."""
         row = f"{self.locus_id}\t{self.target}\t{self.target_identity}\t{self.contig_path}\t{self.gene_id}\t{self.context}\t{self.dist_bp}\t{self.topo_hops}\t{self.orientation}\t{self.effect}"
         if (c := self.copy_number) is None:
-            return f"{row}\t{self.fractional_depth}\n"
+            return f"{row}\t{_or_na(self.fractional_depth)}\n"
+        if c.estimate is None:  # A repeat hub in an assembly without depth: only the link count was measured
+            return f"{row}\tNA\t{c.edges}\tNA\tNA\n"
         tiers = ",".join(f"{n}@{depth:.1f}x" for n, depth in c.tiers)
         return f"{row}\t{c.estimate}\t{c.edges}\t{tiers}\t{str(c.fallback).lower()}\n"
 
@@ -417,6 +446,11 @@ class OutputManager:
 
 
 # Functions ------------------------------------------------------------------------------------------------------------
+def _or_na(value: Optional[float]) -> str:
+    """A report value, or NA if it was not measured."""
+    return 'NA' if value is None else str(value)
+
+
 def format_identities(locus: 'Locus') -> str:
     """Target identities of a locus to 4 decimals, comma-separated in the same order as its targets."""
     return ",".join(f"{t.identity:.4f}" for t in locus.targets)

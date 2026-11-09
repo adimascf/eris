@@ -22,7 +22,7 @@ trapped passenger genes.
 ## 🚀 Features
 
 * **Graph-Aware Traversal:** Overcomes aligner limitations by traversing assembly graph topology to bridge unaligned micro-contigs and resolve shattered targets.
-* **Sub-Clonal Resolution:** Integrates graph read-depth (`dp`/`rd` tags) to calculate fractional copy number, easily distinguishing low-frequency variant bubbles from dominant paths.
+* **Sub-Clonal Resolution:** Integrates graph read-depth (`DP`, `dp` or `depth` tags) to calculate fractional copy number, easily distinguishing low-frequency variant bubbles from dominant paths. If any contig lacks a depth tag, eris warns and reports fractional depth, and the copy number of collapsed repeats, as `NA`.
 * **Contextual Annotation:** Sweeps across stitched paths to identify internal passenger genes (e.g., AMR genes trapped inside transposons) and flanking genomic context.
 * **High Performance:** Built for speed with a hybrid architecture utilizing `numpy`, `numba`, and `mappy` (Minimap2).
 * **Standardized Outputs:** Generates detailed tabular reports (TSV), locus-specific FASTAs, and standard annotations (`pyfgs` powered GFF3/FAA).

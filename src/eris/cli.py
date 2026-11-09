@@ -3,23 +3,32 @@ Module for managing the CLI layer on top of the API; also contains the CLI entry
 """
 import argparse
 import dataclasses
+import sys
 from pathlib import Path
-from sys import stderr
+from typing import IO, TYPE_CHECKING
 
 from eris._version import __version__
 from eris.constants import FeatureType
+
+if TYPE_CHECKING:
+    from eris.io import GenomeAssembly
 
 
 # Classes --------------------------------------------------------------------------------------------------------------
 @dataclasses.dataclass(slots=True, frozen=True)
 class Log:
+    """Writes to stderr. `quiet` hides progress messages only; warnings are always written."""
     quiet: bool = False
-    stream = stderr
+    stream: IO[str] = dataclasses.field(default_factory=lambda: sys.stderr)
 
     def msg(self, msg: str, flush: bool = False) -> None:
         if self.quiet: return
         self.stream.write(msg)
         if flush: self.stream.flush()
+
+    def warn(self, msg: str) -> None:
+        self.stream.write(f"⚠️  {msg}\n")
+        self.stream.flush()
 
 
 # Functions ------------------------------------------------------------------------------------------------------------
@@ -32,6 +41,37 @@ def fraction(value: str) -> float:
     if not 0.0 <= f <= 1.0:
         raise argparse.ArgumentTypeError(f"{value} is not between 0.0 and 1.0")
     return f
+
+
+def _plural(n: int, noun: str) -> str:
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
+def describe_input(genome: 'GenomeAssembly') -> tuple[str, list[str]]:
+    """
+    What eris detected about its input: a one-line summary and the warnings to give.
+
+    The summary counts contigs, links and circular contigs, says whether depth is available and names the input type
+    when it can: a complete genome if every contig is circular, a fragmented assembly if an assembly graph has
+    non-circular contigs. A FASTA file is neither unless every contig in it is circular.
+    """
+    complete = genome.is_complete
+    summary = (f"{_plural(len(genome.contigs), 'contig')}, {_plural(genome.link_count, 'link')}, "
+               f"{_plural(len(genome.circular), 'circular contig')}, "
+               f"{'depth available' if genome.has_depth else 'no depth'}")
+    if complete:
+        summary += ": complete genome"
+    elif genome.has_graph:
+        summary += ": fragmented assembly"
+
+    warnings = []
+    if not genome.has_graph and not complete:
+        warnings.append("No assembly graph (FASTA input): stitching and cross-contig flank search are off. "
+                        "Give the assembler's GFA file to rebuild targets split across contigs.")
+    if not genome.has_depth:
+        warnings.append("Read depth (a DP, dp or depth tag) is missing from some or all contigs: "
+                        "fractional_depth, and copy_number of loci in repeat hubs, are reported as NA.")
+    return summary, warnings
 
 
 # Main CLI entry-point -------------------------------------------------------------------------------------------------
@@ -84,7 +124,7 @@ def main():
 
     opts = parser.add_argument_group('🛠️', 'Other options')
     opts.add_argument('-q', '--quiet', action='store_true',
-                      help='Suppress console logging output')
+                      help='Suppress progress messages; warnings are still shown')
     opts.add_argument('-v', '--version', action='version', version=__version__,
                       help='Show version number and exit')
     opts.add_argument('-h', '--help', action='help',
@@ -104,6 +144,10 @@ def main():
     log.msg("🧬 Loading genome...\n", flush=True)
     genome = GenomeAssembly.from_file(args.genome)
     log.msg("✅ Genome loaded!\n")
+    summary, warnings = describe_input(genome)
+    log.msg(f"🔎 Input: {summary}\n")
+    for warning in warnings:
+        log.warn(warning)
 
     # Run pipeline -----------------------------------------------------------------------------------------------------
     from eris.pipeline import Pipeline

@@ -2,6 +2,7 @@ import pytest
 from types import SimpleNamespace
 from pathlib import Path
 
+from eris.cli import describe_input
 from eris.io import GenomeAssembly, TargetDatabase
 from eris.pipeline import Pipeline
 from eris.constants import FeatureType
@@ -183,6 +184,8 @@ def isoform_groups():
 
 # User mentioned EC958.fasta but that file only contains the chromosome.
 # The actual complete genome (chromosome + plasmids) is EC958_complete_genome.fasta.
+# The complete genome is FASTA, so it has no read depth: its copy numbers stand because every locus on it is in
+# unique sequence (one copy), and no repeat hub needs depth to be counted.
 BENCHMARKS = {
     "complete": ("EC958_complete_genome.fasta", "complete_ec958_IS.reanotated.sorted.bed"),
     # Fragmented graphs are incredibly messy, but eris should still achieve >85% recovery
@@ -240,6 +243,24 @@ def test_benchmark_isoform_copy_counts_do_not_regress(benchmark, isoform_groups)
 @needs_data
 def test_benchmark_reports_each_copy_once(benchmark, isoform_groups):
     _, _, loci = benchmark
+    assert find_overlapping_claims(loci, isoform_groups) == []
+
+
+# The simulated assembly's contigs as FASTA, without the graph: no F1 threshold, as recall drops without stitching
+FRAGMENTED_FASTA = DATA_DIR / "contigs_shovill_simulated.fasta"
+
+
+@needs_data
+@pytest.mark.skipif(not FRAGMENTED_FASTA.exists(), reason=f"{FRAGMENTED_FASTA} not found")
+def test_fragmented_fasta_warns_and_reports_no_stitched_loci_and_no_double_claims(target_db, isoform_groups):
+    genome = GenomeAssembly.from_file(FRAGMENTED_FASTA)
+    with Pipeline(target_db, max_feature_hops=0, mode='collapse', min_coverage=0.30) as pipeline:
+        loci = list(pipeline(genome))
+
+    _, warnings = describe_input(genome)
+    assert any("stitching and cross-contig flank search are off" in w for w in warnings)
+    assert any("reported as NA" in w for w in warnings)
+    assert loci and [locus.id for locus in loci if any(len(t.segments) > 1 for t in locus.targets)] == []
     assert find_overlapping_claims(loci, isoform_groups) == []
 
 
