@@ -2,6 +2,7 @@
 Module to handle query (contigs) and target (features) IO.
 """
 from contextlib import ExitStack
+from importlib.metadata import version
 from dataclasses import dataclass
 from typing import Union, IO, Iterator, Optional
 from pathlib import Path
@@ -17,13 +18,20 @@ from Bio.SeqRecord import SeqRecord
 
 from mappy import Aligner
 
-from pyfgs import FaaWriter, FnaWriter, Gff3Writer
+from pyfgs import Gene
 
 from eris.alignment import Cigar
 from eris.graph import Edge, circular_contigs
 from eris.interval import Strand
 from eris.constants import FeatureType
 from eris.copy_number import CopyNumber, UNIQUE
+
+
+# Constants ------------------------------------------------------------------------------------------------------------
+# The gene files keep pyfgs's own format, so pyfgs stays named as the source of the gene calls
+_PYFGS_VERSION = version("pyfgs")
+GENE_SOURCE = f"pyfgs_v{_PYFGS_VERSION}"
+GFF_HEADER = f"##gff-version 3\n#source-ontology=ab initio prediction: pyfgs v{_PYFGS_VERSION}\n"
 
 
 # Base classes ---------------------------------------------------------------------------------------------------------
@@ -354,19 +362,20 @@ class OutputManager:
         # Write TSV Header dynamically from the dataclass
         self.tsv_handle.write(ReportRow.header(self.mode))
 
-        # 2. Setup Optional PyFGS Writers
-        self.gff_writer = None
-        self.faa_writer = None
-        self.fna_writer = None
+        # 2. Setup optional gene files, named by gene ID so they join to the report
+        self.gff_handle = None
+        self.faa_handle = None
+        self.fna_handle = None
 
         if self.prefix and self.write_gff:
-            self.gff_writer = self._stack.enter_context(Gff3Writer(f"{self.prefix}_assembly.gff"))
+            self.gff_handle = self._stack.enter_context(open(f"{self.prefix}_assembly.gff", "w"))
+            self.gff_handle.write(GFF_HEADER)
 
         if self.prefix and self.write_faa:
-            self.faa_writer = self._stack.enter_context(FaaWriter(f"{self.prefix}_proteins.faa"))
+            self.faa_handle = self._stack.enter_context(open(f"{self.prefix}_proteins.faa", "w"))
 
         if self.prefix and self.write_fna:
-            self.fna_writer = self._stack.enter_context(FnaWriter(f"{self.prefix}_cds.fna"))
+            self.fna_handle = self._stack.enter_context(open(f"{self.prefix}_cds.fna", "w"))
 
         # 3. Setup Locus FASTA writer
         self.locus_fasta = None
@@ -430,14 +439,17 @@ class OutputManager:
             return None
         return locus.copy_number or UNIQUE
 
-    def write_global_genes(self, contig_id: str, sequence: Union[str, bytes], genes: list['Gene']):
-        """Writes assembly-wide gene calls to the GFF3 and FAA files."""
-        if self.gff_writer:
-            self.gff_writer.write_record(genes, contig_id, sequence)
-        if self.faa_writer:
-            self.faa_writer.write_record(genes, contig_id)
-        if self.fna_writer:
-            self.fna_writer.write_record(genes, contig_id)
+    def write_global_genes(self, contig_id: str, sequence: Union[str, bytes], genes: list[Gene]):
+        """Writes a contig's gene calls to the GFF3, protein FASTA and CDS FASTA files, each named by its gene ID."""
+        if isinstance(sequence, str):
+            sequence = sequence.encode()
+        for gene in genes:
+            if self.gff_handle:
+                self.gff_handle.write(format_gff_line(contig_id, sequence, gene))
+            if self.faa_handle:
+                self.faa_handle.write(f"{format_gene_header(contig_id, gene)}\n{gene.translation().decode()}\n")
+            if self.fna_handle:
+                self.fna_handle.write(f"{format_gene_header(contig_id, gene)}\n{gene.sequence().decode()}\n")
 
     def write_locus_fasta(self, locus: 'Locus', sequence: str):
         """Writes a single locus nucleotide sequence to the loci FASTA file, with its contig path in the header."""
@@ -446,6 +458,33 @@ class OutputManager:
 
 
 # Functions ------------------------------------------------------------------------------------------------------------
+def gene_id(contig_id: str, gene: Gene) -> str:
+    """The gene ID of a gene call: its contig, start and end in 1-based closed coordinates."""
+    return f"{contig_id}_{gene.start + 1}_{gene.end}"
+
+
+def format_gff_line(contig_id: str, sequence: bytes, gene: Gene) -> str:
+    """
+    A gene call as a GFF3 line, as pyfgs's Gff3Writer writes it but named by its gene ID.
+
+    A gene with frameshifts is a pseudogene, with a note on each frameshift.
+    """
+    attributes = f"ID={gene_id(contig_id, gene)};inference=ab initio prediction:{GENE_SOURCE}"
+    feature_type = "CDS"
+    if mutations := gene.mutations(sequence):
+        feature_type = "pseudogene"
+        note = ",".join(f"Frameshift {'insertion' if m.mut_type == 'ins' else 'deletion'} at pos {m.pos} "
+                        f"(codon {m.codon_idx})" for m in mutations)
+        attributes += f";pseudogene=unknown;Note={note}"
+    return (f"{contig_id}\t{GENE_SOURCE}\t{feature_type}\t{gene.start + 1}\t{gene.end}\t{gene.score:.2f}\t"
+            f"{Strand(gene.strand)}\t0\t{attributes}\n")
+
+
+def format_gene_header(contig_id: str, gene: Gene) -> str:
+    """The FASTA header of a gene call: its gene ID, then where it lies, as pyfgs writes it."""
+    return f">{gene_id(contig_id, gene)} {contig_id}:{gene.start + 1}-{gene.end} strand={Strand(gene.strand)}"
+
+
 def _or_na(value: Optional[float]) -> str:
     """A report value, or NA if it was not measured."""
     return 'NA' if value is None else str(value)
