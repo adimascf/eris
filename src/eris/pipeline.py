@@ -13,7 +13,7 @@ from mappy import ThreadBuffer
 
 from pyfgs import GeneFinder, Model, Gene, Mutation
 
-from eris.io import TargetDatabase, GenomeAssembly
+from eris.io import TargetDatabase, GenomeAssembly, gene_id
 from eris.graph import TopologyEngine
 from eris.alignment import AlignmentBatch, AlignmentRecord, pooled_identity
 from eris.interval import IntervalBatch, Context, Strand, Interval
@@ -546,7 +546,7 @@ class Pipeline:
                 ends[i] = g.end
                 strands[i] = g.strand
                 features.append(GenomicFeature(
-                    id=f"{contig_id}_{g.start}_{g.end}",
+                    id=gene_id(contig_id, g),
                     type=FeatureType.CDS,
                     segments=[LocationSegment(contig_id, g.start, g.end, Strand(g.strand))]
                 ))

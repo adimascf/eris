@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from pathlib import Path
 
 from eris.cli import describe_input
-from eris.io import GenomeAssembly, TargetDatabase
+from eris.io import GenomeAssembly, TargetDatabase, gene_id
 from eris.pipeline import Pipeline
 from eris.constants import FeatureType
 from eris.copy_number import CopyNumber
@@ -471,8 +471,7 @@ class GeneSequences:
 
     def write_global_genes(self, contig_id, sequence, genes):
         for g in genes:
-            # The gene id eris gives each call in Pipeline._process_contig
-            self.by_id[f"{contig_id}_{g.start}_{g.end}"] = g.sequence()
+            self.by_id[gene_id(contig_id, g)] = g.sequence()
 
 
 def assert_unchanged(found, known, table: str):
