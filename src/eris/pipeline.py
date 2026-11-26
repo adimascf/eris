@@ -14,7 +14,7 @@ from mappy import ThreadBuffer
 from pyfgs import GeneFinder, Model, Gene, Mutation
 
 from eris.io import TargetDatabase, GenomeAssembly, gene_id
-from eris.graph import TopologyEngine, Edge
+from eris.graph import AssemblyGraph, TopologyEngine, Edge
 from eris.flanks import FlankSearch, FlankCandidate, Flanks, TargetSpan, Branch, HubBranches, BudgetRule
 from eris.hub import Hubs
 from eris.alignment import AlignmentBatch, AlignmentRecord, pooled_identity
@@ -136,13 +136,13 @@ class Locus:
     fractional_depth: Optional[float] = 1.0  # Fractional depth in variant mode, copy number in collapse; None: no depth
     copy_number: Optional[CopyNumber] = None  # Collapse mode only
 
-    def extract_sequence(self, genome: 'GenomeAssembly') -> str:
+    def extract_sequence(self, genome: 'GenomeAssembly', graph: AssemblyGraph) -> str:
         """
         Extracts the nucleotide sequence of the locus from the assembly.
 
         A local locus is its slice of the contig. A stitched locus follows its contig path: each contig on the strand
         it is read on, the edge overlap with the contig before it counted once, cut to the ends of the target on the
-        first and last contigs.
+        first and last contigs. `graph` is `genome`'s assembly graph, for the edge overlaps.
         """
         if len(segments := self.targets[0].segments) == 1:
             return str(genome[self.contig][self.start:self.end])
@@ -152,7 +152,7 @@ class Locus:
             seq = genome[seg.contig]
             if seg.strand == Strand.REVERSE:
                 seq = seq.reverse_complement()
-            skip = genome.overlap(prev.contig, prev.strand, seg.contig, seg.strand) if prev else 0
+            skip = graph.overlap(prev.contig, prev.strand, seg.contig, seg.strand) if prev else 0
             parts.append(str(seq[skip:]))
             prev = seg
         path = "".join(parts)
@@ -243,13 +243,12 @@ class LocusBuilder:
                  features: dict[str, list[GenomicFeature]] = None,
                  genes: dict[str, list[Gene]] = None,
                  max_flank_distance: Optional[int] = DEFAULT_MAX_FLANK_DISTANCE,
-                 gene_intervals: Optional[dict[str, IntervalBatch]] = None,
-                 hubs: Optional[Hubs] = None):
+                 gene_intervals: Optional[dict[str, IntervalBatch]] = None):
         """
         Initialize the LocusBuilder.
 
         Args:
-            topology_engine: Engine for graph traversal.
+            topology_engine: The stitcher, and through it the assembly graph.
             genome: The full assembly and metadata.
             target_feature_type: Classification for primary alignment targets.
             flank_budget: The maximum number of flank genes reported on each side of a locus.
@@ -260,7 +259,6 @@ class LocusBuilder:
                 graph; None for no limit.
             gene_intervals: Each contig's genes as intervals sorted by start, indexing `features` and `genes` by
                 their original indices.
-            hubs: The assembly's repeat hubs, built from `genome` if not given.
         """
         self.topology_engine = topology_engine
         self.genome = genome
@@ -270,9 +268,9 @@ class LocusBuilder:
         self.genes = genes or {}
         self.gene_intervals = gene_intervals or {}
         self.alignments: dict[str, AlignmentBatch] = {}
-        self.hubs = hubs or Hubs.from_genome(genome)
+        self.hubs = Hubs(topology_engine.graph)
         rule = BudgetRule.PER_BRANCH if self._collapse else BudgetRule.SHARED
-        self.flank_search = FlankSearch(topology_engine, self.gene_intervals, flank_budget, max_flank_distance,
+        self.flank_search = FlankSearch(topology_engine.graph, self.gene_intervals, flank_budget, max_flank_distance,
                                         rule)
 
     @property
@@ -366,7 +364,7 @@ class LocusBuilder:
         u_links, d_links = self._hub_branch_links(fragments)
         if not (u_links or d_links):
             return None
-        lengths = self.genome.contig_lengths
+        lengths = self.topology_engine.graph.contig_lengths
         return HubBranches(tuple(Branch(e, carried_past_link(e, self.alignments, lengths)) for e in u_links),
                            tuple(Branch(e, carried_past_link(e, self.alignments, lengths)) for e in d_links),
                            frozenset(f.t_name for f in fragments))
@@ -458,9 +456,10 @@ class LocusBuilder:
             for idx in gene_intervals.query(span.start, span.end):
                 locus.passengers.append(self._passenger(contig, idx, gene_intervals, primary_strand, span_bounds))
 
+            graph = self.topology_engine.graph
             target = TargetSpan(contig, span.start, span.end, primary_strand,
-                                beyond_contig_end(targets, primary_strand, Context.UPSTREAM, self.topology_engine),
-                                beyond_contig_end(targets, primary_strand, Context.DOWNSTREAM, self.topology_engine))
+                                beyond_contig_end(targets, primary_strand, Context.UPSTREAM, graph),
+                                beyond_contig_end(targets, primary_strand, Context.DOWNSTREAM, graph))
             self._add_flanks(locus, self.flank_search.search(target), target)
 
             loci.append(locus)
@@ -504,10 +503,10 @@ class LocusBuilder:
         # 2. FLANKS: upstream from the first fragment, downstream from the last
         first_span = TargetSpan(first.t_name, first.t_start, first.t_end, Strand(first.strand),
                                 beyond_upstream=beyond_contig_end([first], Strand(first.strand), Context.UPSTREAM,
-                                                                  self.topology_engine))
+                                                                  self.topology_engine.graph))
         last_span = TargetSpan(last.t_name, last.t_start, last.t_end, Strand(last.strand),
                                beyond_downstream=beyond_contig_end([last], Strand(last.strand), Context.DOWNSTREAM,
-                                                                   self.topology_engine))
+                                                                   self.topology_engine.graph))
         flanks = self.flank_search.search(first_span, last_span, branches=self._hub_branches(fragments))
         self._add_flanks(locus, flanks, first_span, last_span)
 
@@ -531,7 +530,7 @@ class Pipeline:
     for parallel contig processing.
     """
     __slots__ = ('target_db', '_gene_finder', 'flank_budget', 'locus_tolerance', '_executor', 'mode', 'min_coverage',
-                 'min_identity', 'max_flank_distance')
+                 'min_identity', 'max_flank_distance', 'graph')
     _THREAD_LOCAL = thread_local()
 
     def __init__(self, target_db: 'TargetDatabase', flank_budget: int = 3, locus_tolerance: int = 0,
@@ -558,6 +557,7 @@ class Pipeline:
         self.min_coverage = min_coverage
         self.min_identity = min_identity
         self.max_flank_distance = max_flank_distance
+        self.graph: Optional[AssemblyGraph] = None  # the assembly graph of the genome last run, set by __call__
         self._gene_finder = GeneFinder(model=Model.Complete, whole_genome=False)
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
 
@@ -616,18 +616,8 @@ class Pipeline:
             if a_batch:
                 alignments[contig_id] = a_batch
 
-        # for batch in alignments.values():
-        #     for n, _ in enumerate(batch.q_names):
-        #         print(batch.get_record(n))
-
-        topology_engine = TopologyEngine(
-            edges=genome.edges,
-            contig_lengths=genome.contig_lengths,
-            contig_depths=genome.contig_depths,
-            mode=self.mode,
-            circular=genome.circular)
-
-        hubs = Hubs.from_genome(genome)
+        self.graph = graph = AssemblyGraph.from_genome(genome)
+        topology_engine = TopologyEngine(graph, genome.contig_depths, mode=self.mode)
         builder = LocusBuilder(
             topology_engine=topology_engine,
             genome=genome,
@@ -638,12 +628,11 @@ class Pipeline:
             genes=gene_cds,
             max_flank_distance=self.max_flank_distance,
             gene_intervals=gene_intervals,
-            hubs=hubs
         )
 
         loci = builder.assemble(alignments, min_coverage=self.min_coverage, min_identity=self.min_identity)
         if self.mode == 'collapse':
             # A walk out of one locus's hub stops at any other locus's hub, so every locus must be built first
             loci = list(loci)
-            assign_copy_numbers(loci, genome, hubs)
+            assign_copy_numbers(loci, genome, graph)
         yield from loci

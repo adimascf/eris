@@ -1,29 +1,9 @@
 import pytest
 import numpy as np
 
-from eris.graph import Graph, Edge, TopologyEngine
+from eris.graph import AssemblyGraph, Edge, TopologyEngine
 from eris.constants import Strand
 from eris.alignment import AlignmentBatch
-
-def test_undirected_graph_edges():
-    graph = Graph(directed=False)
-    # Add an edge from ctgA to ctgB
-    edge = Edge("ctgA", Strand.FORWARD, "ctgB", Strand.FORWARD, overlap=50)
-    graph.add_edge(edge)
-    
-    # We should be able to get neighbors for ctgA (the direct edge)
-    a_neighbors = graph.get_neighbors("ctgA")
-    assert len(a_neighbors) == 1
-    assert list(a_neighbors)[0].v == "ctgB"
-    
-    # And we should be able to get neighbors for ctgB (the implicit reverse edge)
-    b_neighbors = graph.get_neighbors("ctgB")
-    assert len(b_neighbors) == 1
-    reverse_edge = list(b_neighbors)[0]
-    
-    assert reverse_edge.v == "ctgA"
-    assert reverse_edge.u_strand == Strand.FORWARD
-    assert reverse_edge.overlap == 50
 
 def test_topology_engine_bounded_paths():
     # Construct a mock DAG: ctgA -> ctgB -> ctgC
@@ -34,7 +14,7 @@ def test_topology_engine_bounded_paths():
     contig_lengths = {"ctgA": 1000, "ctgB": 500, "ctgC": 1000}
     contig_depths = {"ctgA": 10.0, "ctgB": 2.0, "ctgC": 10.0}
     
-    engine = TopologyEngine(edges, contig_lengths, contig_depths)
+    engine = TopologyEngine(AssemblyGraph(edges, contig_lengths), contig_depths)
     
     # Expected length across B is exactly 500bp
     paths = engine._find_bounded_paths(
@@ -61,7 +41,7 @@ def test_topology_engine_collapsed_path():
     contig_lengths = {"ctgA": 1000, "ctgB1": 500, "ctgB2": 500, "ctgC": 1000}
     contig_depths = {"ctgA": 10.0, "ctgB1": 1.0, "ctgB2": 10.0, "ctgC": 10.0}
     
-    engine = TopologyEngine(edges, contig_lengths, contig_depths)
+    engine = TopologyEngine(AssemblyGraph(edges, contig_lengths), contig_depths)
     
     # The greedy path finder should pick B2 because it has the highest depth (10.0 > 1.0)
     paths = engine._find_collapsed_path(
@@ -84,7 +64,7 @@ def test_topology_engine_resolve():
     contig_lengths = {"ctgA": 1000, "ctgB": 500, "ctgC": 1000}
     contig_depths = {"ctgA": 10.0, "ctgB": 10.0, "ctgC": 10.0}
     
-    engine = TopologyEngine(edges, contig_lengths, contig_depths, mode='variant')
+    engine = TopologyEngine(AssemblyGraph(edges, contig_lengths), contig_depths, mode='variant')
     
     # Create two partial AlignmentRecords representing the shattered hit
     batch_a = AlignmentBatch(
@@ -138,7 +118,7 @@ def test_resolve_consumes_alignments_on_intermediate_contigs():
     contig_lengths = {"ctgA": 1000, "ctgB": 500, "ctgC": 1000}
     contig_depths = {"ctgA": 10.0, "ctgB": 10.0, "ctgC": 10.0}
 
-    engine = TopologyEngine(edges, contig_lengths, contig_depths, mode='collapse')
+    engine = TopologyEngine(AssemblyGraph(edges, contig_lengths), contig_depths, mode='collapse')
 
     def batch(q_name, q_length, q_start, q_end, t_name, t_length, t_start, t_end):
         length = q_end - q_start
@@ -190,7 +170,7 @@ def test_resolve_chains_fragments_overlapping_by_edge_overlap(mode):
     ]
     contig_lengths = {"ctgA": 1000, "ctgB": 500, "ctgC": 5000}
     contig_depths = {"ctgA": 10.0, "ctgB": 10.0, "ctgC": 10.0}
-    engine = TopologyEngine(edges, contig_lengths, contig_depths, mode=mode)
+    engine = TopologyEngine(AssemblyGraph(edges, contig_lengths), contig_depths, mode=mode)
 
     alignments = {
         "ctgA": _fragment("IS1", 1500, 0, 1000, "ctgA", 1000, 0, 1000),
@@ -212,7 +192,7 @@ def test_resolve_follows_gfa_link_in_reverse_complement(mode):
     edges = [Edge("ctgB", Strand.REVERSE, "ctgA", Strand.FORWARD, overlap=111)]
     contig_lengths = {"ctgA": 1326, "ctgB": 5000}
     contig_depths = {"ctgA": 30.0, "ctgB": 30.0}
-    engine = TopologyEngine(edges, contig_lengths, contig_depths, mode=mode)
+    engine = TopologyEngine(AssemblyGraph(edges, contig_lengths), contig_depths, mode=mode)
 
     alignments = {
         "ctgA": _fragment("IS1", 2532, 0, 1326, "ctgA", 1326, 0, 1326, Strand.REVERSE),
@@ -256,7 +236,7 @@ def test_resolve_chains_the_is_body_not_both_ends_of_one_long_contig(mode):
     ]
     contig_lengths = {"ctgUp": 159, "ctgLong": 20707, "ctgBody": 965, "ctgDown": 364}
     contig_depths = {"ctgUp": 65.1, "ctgLong": 33.7, "ctgBody": 33.4, "ctgDown": 70.3}
-    engine = TopologyEngine(edges, contig_lengths, contig_depths, mode=mode)
+    engine = TopologyEngine(AssemblyGraph(edges, contig_lengths), contig_depths, mode=mode)
 
     alignments = _fragments([
         ("IS1", 2533, 0, 159, "ctgUp", 0, 159, R),
@@ -276,7 +256,7 @@ def test_resolve_does_not_stitch_fragments_on_one_contig(mode):
     # EC958 chromosome: IS21's inverted repeats hit both ends of an IS100kyp copy (IS21 family), 2042 bp apart,
     # about the IS21 query gap. The body between them is IS100kyp, not IS21, so the ends must stay unstitched.
     contig_lengths = {"chr": 5000000}
-    engine = TopologyEngine([], contig_lengths, {"chr": 1.0}, mode=mode)
+    engine = TopologyEngine(AssemblyGraph([], contig_lengths), {"chr": 1.0}, mode=mode)
     alignments = _fragments([
         ("IS21", 2131, 0, 130, "chr", 2252235, 2252365, Strand.FORWARD),
         ("IS21", 2131, 1963, 2131, "chr", 2254407, 2254575, Strand.FORWARD),
@@ -290,7 +270,7 @@ def test_resolve_does_not_stitch_fragments_on_one_contig(mode):
 
 def _stitched_paths(mode, contigs, edges, rows, depths=None):
     """The contig names of each path stitched from rows (see _fragments) on contigs of {name: length}."""
-    engine = TopologyEngine(edges, contigs, depths or {c: 10.0 for c in contigs}, mode=mode)
+    engine = TopologyEngine(AssemblyGraph(edges, contigs), depths or {c: 10.0 for c in contigs}, mode=mode)
     return [[f.t_name for f in p] for p in engine.resolve_split_alignments(_fragments(rows, contigs))[1]]
 
 
@@ -435,23 +415,25 @@ def test_resolve_lets_fragments_overlap_on_the_query_by_as_much_as_the_contig_pa
     assert paths == ([["ctgA", "ctgM", "ctgB"]] if stitched else [])
 
 
-def test_neighbours_come_back_in_the_order_their_links_were_read():
-    # Set order depends on the string hash seed, which made flanks change between runs on the same assembly
-    edges = [Edge("hub", Strand.FORWARD, f"ctg{i}", Strand.FORWARD) for i in range(10)]
-    graph = Graph(edges, directed=False)
-
-    assert list(graph.get_neighbors("hub")) == edges
-    assert list(graph.get_neighbors("ctg3")) == [edges[3].reverse()]
-
-
 def test_links_from_a_contig_strand_come_in_the_order_read_with_each_links_complement():
-    # 'ctgB+ -> ctgA+' leaves ctgA by its start as its complement, 'ctgA- -> ctgB-'
+    # 'ctgB+ -> ctgA+' leaves ctgA by its start as its complement, 'ctgA- -> ctgB-'. Order decides which flanks are
+    # reported: a set's order depends on the string hash seed, which made flanks change between runs
     edges = [Edge("ctgA", Strand.FORWARD, "ctgC", Strand.FORWARD), Edge("ctgB", Strand.FORWARD, "ctgA", Strand.FORWARD),
              Edge("ctgA", Strand.FORWARD, "ctgD", Strand.REVERSE)]
-    engine = TopologyEngine(edges, {c: 1000 for c in ("ctgA", "ctgB", "ctgC", "ctgD")}, {})
+    edges += [Edge("ctgA", Strand.FORWARD, f"ctg{i}", Strand.FORWARD) for i in range(10)]
+    graph = AssemblyGraph(edges, {c: 1000 for e in edges for c in (e.u, e.v)})
 
-    assert engine.links_from("ctgA", Strand.FORWARD) == [edges[0], edges[2]]
-    assert engine.links_from("ctgA", Strand.REVERSE) == [edges[1].complement()]
+    assert graph.links_from("ctgA", Strand.FORWARD) == [edges[0], edges[2], *edges[3:]]
+    assert graph.links_from("ctgA", Strand.REVERSE) == [edges[1].complement()]
+    assert graph.links_from("ctg3", Strand.REVERSE) == [edges[6].complement()]
+
+
+def test_a_links_overlap_is_found_on_either_strand_and_is_0_without_a_link():
+    graph = AssemblyGraph([Edge("ctgA", Strand.FORWARD, "ctgB", Strand.REVERSE, 55)], {"ctgA": 1000, "ctgB": 1000})
+
+    assert graph.overlap("ctgA", Strand.FORWARD, "ctgB", Strand.REVERSE) == 55
+    assert graph.overlap("ctgB", Strand.FORWARD, "ctgA", Strand.REVERSE) == 55
+    assert graph.overlap("ctgB", Strand.FORWARD, "ctgA", Strand.FORWARD) == 0
 
 
 @pytest.mark.parametrize("mode", ["variant", "collapse"])
@@ -463,7 +445,7 @@ def test_synthetic_node_carries_the_strand_its_contig_is_entered_on(mode):
     ]
     contig_lengths = {"ctgA": 1000, "ctgB": 500, "ctgC": 1000}
     contig_depths = {"ctgA": 10.0, "ctgB": 10.0, "ctgC": 10.0}
-    engine = TopologyEngine(edges, contig_lengths, contig_depths, mode=mode)
+    engine = TopologyEngine(AssemblyGraph(edges, contig_lengths), contig_depths, mode=mode)
 
     alignments = {
         "ctgA": _fragment("IS1", 2000, 0, 1000, "ctgA", 1000, 0, 1000),

@@ -9,7 +9,7 @@ from typing import NamedTuple, Optional, cast
 import numpy as np
 
 from eris.constants import Context, Strand
-from eris.graph import Edge, TopologyEngine, is_self_link
+from eris.graph import AssemblyGraph, Edge, is_self_link
 from eris.interval import Interval, IntervalBatch
 
 
@@ -132,7 +132,7 @@ class FlankSearch:
     """
     __slots__ = ('graph', 'genes', 'budget', 'max_distance', 'rule')
 
-    def __init__(self, graph: TopologyEngine, genes: Mapping[str, IntervalBatch], budget: int,
+    def __init__(self, graph: AssemblyGraph, genes: Mapping[str, IntervalBatch], budget: int,
                  max_distance: Optional[int], rule: BudgetRule):
         """
         Args:

@@ -3,7 +3,7 @@ import pytest
 
 from eris.constants import Context, Strand
 from eris.flanks import Branch, BudgetRule, FlankSearch, HubBranches, TargetSpan
-from eris.graph import Edge, TopologyEngine, circular_contigs
+from eris.graph import AssemblyGraph, Edge, circular_contigs
 from eris.interval import IntervalBatch
 
 PER_BRANCH, SHARED = BudgetRule.PER_BRANCH, BudgetRule.SHARED
@@ -12,11 +12,11 @@ F, R = Strand.FORWARD, Strand.REVERSE
 
 def _search(lengths, edges, genes, budget=1, rule=SHARED, max_distance=None):
     """genes: contig -> [(start, end)] of its genes on '+', in start order. Circular contigs are found from `edges`."""
-    engine = TopologyEngine(list(edges), lengths, {c: 1.0 for c in lengths}, circular=circular_contigs(edges))
+    graph = AssemblyGraph(edges, lengths, circular_contigs(edges))
     batches = {c: IntervalBatch(np.array([s for s, _ in spans]), np.array([e for _, e in spans]),
                                 np.array([F] * len(spans), dtype=np.int8))
                for c, spans in genes.items()}
-    return FlankSearch(engine, batches, budget, max_distance, rule)
+    return FlankSearch(graph, batches, budget, max_distance, rule)
 
 
 def _found(candidates):

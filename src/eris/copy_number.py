@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Callable, NamedTuple, Optional, TYPE_CHECKING
 
+from eris.graph import AssemblyGraph
 from eris.hub import Hubs, RepeatHub
 from eris.interval import Strand
 
@@ -59,20 +60,20 @@ class WalkEnd(NamedTuple):
 
 
 # Functions ------------------------------------------------------------------------------------------------------------
-def assign_copy_numbers(loci: list['Locus'], genome: 'GenomeAssembly', hubs: Optional[Hubs] = None) -> None:
+def assign_copy_numbers(loci: list['Locus'], genome: 'GenomeAssembly', graph: AssemblyGraph) -> None:
     """
     Sets each locus's copy number, and its `fractional_depth`, which the report prints as copy_number. Without read
     depth a repeat hub gets only its anchor link count; its estimate and `fractional_depth` are None. A locus in
-    unique sequence is one copy either way. Loci whose hubs share a contig share one copy number (#14). `hubs` is
-    built from `genome` if not given.
+    unique sequence is one copy either way. Loci whose hubs share a contig share one copy number (#14). `graph` is
+    `genome`'s assembly graph.
     """
-    hubs = hubs or Hubs.from_genome(genome)
+    hubs = Hubs(graph)
     groups = hubs.group([hubs.of_locus(locus) for locus in loci])
     repeats = {contig for hub, _ in groups for contig in hub}
     for hub, members in groups:
         copies = UNIQUE
         if hub:
-            ends = _walk_out(hubs, hub, repeats - hub.names)
+            ends = _walk_out(graph, hubs, hub, repeats - hub.names)
             if genome.has_depth:
                 hub_depth = max(genome.contig_depths[c] for c in hub)
                 copies = _estimate(hub_depth, ends, genome.contig_depths, hub.names,
@@ -98,7 +99,7 @@ def depth_tiers(depths: list[float], tolerance: float = TIER_TOLERANCE) -> list[
     return tiers
 
 
-def _walk_out(hubs: Hubs, hub: RepeatHub, repeats: set[str]) -> dict[str, list[WalkEnd]]:
+def _walk_out(graph: AssemblyGraph, hubs: Hubs, hub: RepeatHub, repeats: set[str]) -> dict[str, list[WalkEnd]]:
     """
     Walks out of a repeat hub on each side, following edge orientation so a walk never turns back towards the hub's
     side of a contig (an undirected walk out of the IS26 hub reaches the rRNA repeat). A walk ends at the first contig
@@ -107,7 +108,7 @@ def _walk_out(hubs: Hubs, hub: RepeatHub, repeats: set[str]) -> dict[str, list[W
     starts on the links out of every contig in the hub (see `Hubs.leaving`), since a copy can leave the hub from any
     of them.
     """
-    graph, lengths = hubs.graph, hubs.contig_lengths
+    lengths = graph.contig_lengths
     ends = {}
     for side, sign in (("upstream", -1), ("downstream", 1)):
         found: dict[tuple[str, Strand], WalkEnd] = {}
@@ -120,7 +121,7 @@ def _walk_out(hubs: Hubs, hub: RepeatHub, repeats: set[str]) -> dict[str, list[W
                 continue
             seen.add(node)
             used += lengths[edge.v] - edge.overlap
-            onward = [e for e in graph.get_neighbors(edge.v) if e.u_strand == edge.v_strand]
+            onward = graph.links_from(edge.v, edge.v_strand)
             if edge.v in repeats:
                 kind = WalkEndKind.REPEAT
             elif lengths[edge.v] >= MIN_ANCHOR_LENGTH:

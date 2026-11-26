@@ -3,7 +3,7 @@ from typing import Iterable
 
 from eris.alignment import AlignmentRecord
 from eris.constants import FeatureType, Strand
-from eris.graph import Edge
+from eris.graph import AssemblyGraph, Edge
 from eris.hub import Hubs, RepeatHub
 from eris.pipeline import GenomicFeature, LocationSegment, Locus
 
@@ -21,7 +21,7 @@ def locus(*segments: tuple[str, int, int, Strand]) -> Locus:
 
 
 def hubs(lengths: dict[str, int], edges: Iterable[Edge] = ()) -> Hubs:
-    return Hubs(list(edges), lengths)
+    return Hubs(AssemblyGraph(edges, lengths))
 
 
 def test_a_contig_is_in_the_hub_only_if_the_target_covers_it_end_to_end():

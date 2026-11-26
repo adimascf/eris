@@ -33,7 +33,7 @@ from typing import NamedTuple
 import mappy
 
 from eris.constants import FeatureType
-from eris.graph import Edge, Graph
+from eris.graph import AssemblyGraph, Edge
 from eris.interval import Strand
 from eris.io import GenomeAssembly, TargetDatabase
 from eris.pipeline import Pipeline
@@ -91,12 +91,12 @@ class WalkEnd(NamedTuple):
     kind: str
 
 
-def link_graph(edges: list[Edge]) -> Graph:
-    """The assembly graph with each link on both strands, as `TopologyEngine` builds it."""
-    return Graph(edges + [e.complement() for e in edges])
+def link_graph(edges: list[Edge]) -> AssemblyGraph:
+    """The assembly graph with each link on both strands. The walk takes contig lengths separately."""
+    return AssemblyGraph(edges, {})
 
 
-def walk_out(graph: Graph, hub: list[tuple[str, Strand]], lengths: dict[str, int], repeats: set[str],
+def walk_out(graph: AssemblyGraph, hub: list[tuple[str, Strand]], lengths: dict[str, int], repeats: set[str],
              min_anchor: int = MIN_ANCHOR_LENGTH, stub_budget: int = STUB_BUDGET) -> dict[str, list[WalkEnd]]:
     """
     Walks out of a repeat hub on each side, following edge orientation so a walk never turns back towards the hub's
@@ -109,8 +109,7 @@ def walk_out(graph: Graph, hub: list[tuple[str, Strand]], lengths: dict[str, int
     ends = {}
     for side, sign in (("upstream", -1), ("downstream", 1)):
         found: dict[tuple[str, Strand], WalkEnd] = {}
-        stack = [(edge, 0) for contig, strand in hub for edge in graph.get_neighbors(contig)
-                 if edge.u_strand == strand * sign]
+        stack = [(edge, 0) for contig, strand in hub for edge in graph.links_from(contig, Strand(strand * sign))]
         seen = set()
         while stack:
             edge, used = stack.pop()
@@ -119,7 +118,7 @@ def walk_out(graph: Graph, hub: list[tuple[str, Strand]], lengths: dict[str, int
                 continue
             seen.add(node)
             used += lengths[edge.v] - edge.overlap
-            onward = [e for e in graph.get_neighbors(edge.v) if e.u_strand == edge.v_strand]
+            onward = graph.links_from(edge.v, edge.v_strand)
             if edge.v in repeats:
                 kind = "repeat"
             elif lengths[edge.v] >= min_anchor:

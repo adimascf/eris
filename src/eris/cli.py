@@ -200,7 +200,7 @@ def main():
             out.write_locus_relations(locus)
 
             if out.locus_fasta:
-                out.write_locus_fasta(locus, locus.extract_sequence(genome))
+                out.write_locus_fasta(locus, locus.extract_sequence(genome, pipeline.graph))
 
     log.msg("🎉 Pipeline completed!\n")
 

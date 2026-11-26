@@ -6,7 +6,7 @@ from Bio.Seq import Seq
 
 from eris.alignment import AlignmentBatch
 from eris.constants import FeatureType, Strand
-from eris.graph import Edge, TopologyEngine
+from eris.graph import AssemblyGraph, Edge, TopologyEngine
 from eris.interval import IntervalBatch
 from eris.io import GenomeAssembly, format_contig_path
 from eris.pipeline import LocusBuilder, Locus, GenomicFeature, LocationSegment
@@ -33,7 +33,7 @@ def _builder(lengths, edges=(), mode='variant', depths=None, intervals=None, fla
     depths = depths if depths is not None else {c: 10.0 for c in lengths}
     genome = GenomeAssembly("test", {c: Seq("A" * n) for c, n in lengths.items()}, list(edges), depths, lengths,
                             frozenset(circular))
-    engine = TopologyEngine(list(edges), lengths, depths, mode=mode, circular=circular)
+    engine = TopologyEngine(AssemblyGraph.from_genome(genome), depths, mode=mode)
     return LocusBuilder(engine, genome, flank_budget=flank_budget, gene_intervals=intervals, **builder_args)
 
 
@@ -203,7 +203,7 @@ def test_stitched_sequence_joins_contigs_on_their_path_strands_counting_each_ove
     genome = _genome({"ctgA": _A, "ctgB": _B}, [Edge("ctgA", Strand.FORWARD, "ctgB", Strand.REVERSE, overlap=3)])
     locus = _path_locus(("ctgA", 0, 10, Strand.FORWARD), ("ctgB", 0, 10, Strand.REVERSE))
 
-    assert locus.extract_sequence(genome) == "AAAACCCGGG" + "TTTACGT"
+    assert locus.extract_sequence(genome, AssemblyGraph.from_genome(genome)) == "AAAACCCGGG" + "TTTACGT"
 
 
 def test_stitched_sequence_is_cut_to_the_target_ends_on_the_first_and_last_contigs():
@@ -211,7 +211,7 @@ def test_stitched_sequence_is_cut_to_the_target_ends_on_the_first_and_last_conti
     genome = _genome({"ctgA": _A, "ctgB": _B}, [Edge("ctgA", Strand.FORWARD, "ctgB", Strand.REVERSE, overlap=3)])
     locus = _path_locus(("ctgA", 4, 10, Strand.FORWARD), ("ctgB", 3, 10, Strand.REVERSE))
 
-    assert locus.extract_sequence(genome) == "CCCGGG" + "TTTA"
+    assert locus.extract_sequence(genome, AssemblyGraph.from_genome(genome)) == "CCCGGG" + "TTTA"
 
 
 def test_stitched_sequence_finds_the_overlap_of_a_link_written_on_the_other_strands():
@@ -219,7 +219,7 @@ def test_stitched_sequence_finds_the_overlap_of_a_link_written_on_the_other_stra
     genome = _genome({"ctgA": _A, "ctgB": _B}, [Edge("ctgB", Strand.FORWARD, "ctgA", Strand.REVERSE, overlap=3)])
     locus = _path_locus(("ctgA", 0, 10, Strand.FORWARD), ("ctgB", 0, 10, Strand.REVERSE))
 
-    assert locus.extract_sequence(genome) == "AAAACCCGGG" + "TTTACGT"
+    assert locus.extract_sequence(genome, AssemblyGraph.from_genome(genome)) == "AAAACCCGGG" + "TTTACGT"
 
 
 def test_stitched_sequence_read_backwards_starts_from_the_target_start_on_the_reverse_strand():
@@ -227,7 +227,7 @@ def test_stitched_sequence_read_backwards_starts_from_the_target_start_on_the_re
     genome = _genome({"ctgA": _A, "ctgB": _B}, [Edge("ctgA", Strand.FORWARD, "ctgB", Strand.REVERSE, overlap=3)])
     locus = _path_locus(("ctgB", 3, 10, Strand.FORWARD), ("ctgA", 4, 10, Strand.REVERSE))
 
-    assert locus.extract_sequence(genome) == str(Seq("CCCGGG" + "TTTA").reverse_complement())
+    assert locus.extract_sequence(genome, AssemblyGraph.from_genome(genome)) == str(Seq("CCCGGG" + "TTTA").reverse_complement())
 
 
 def test_stitched_sequence_keeps_an_unaligned_intermediate_contig_whole_but_for_its_overlap():
@@ -237,14 +237,14 @@ def test_stitched_sequence_keeps_an_unaligned_intermediate_contig_whole_but_for_
     genome = _genome({"ctgA": "GGGGAC", "ctgB": "TTTGTC", "ctgC": "AAACCCC"}, edges)
     locus = _path_locus(("ctgA", 3, 6, Strand.FORWARD), ("ctgB", 0, 6, Strand.REVERSE), ("ctgC", 0, 4, Strand.FORWARD))
 
-    assert locus.extract_sequence(genome) == "GAC" + "CAAA" + "AC"
+    assert locus.extract_sequence(genome, AssemblyGraph.from_genome(genome)) == "GAC" + "CAAA" + "AC"
 
 
 def test_local_sequence_is_its_slice_of_the_contig():
     genome = _genome({"ctgA": _A}, [])
     locus = _path_locus(("ctgA", 2, 8, Strand.REVERSE))
 
-    assert locus.extract_sequence(genome) == "AACCCG"
+    assert locus.extract_sequence(genome, AssemblyGraph.from_genome(genome)) == "AACCCG"
 
 
 def _flank_builder(lengths, edges, gene_spans, mode='variant', **builder_args):

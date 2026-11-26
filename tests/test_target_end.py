@@ -5,7 +5,7 @@ import pytest
 
 from eris.alignment import AlignmentBatch
 from eris.constants import Context, Strand
-from eris.graph import Edge, TopologyEngine
+from eris.graph import Edge, AssemblyGraph
 from eris.target_end import beyond_contig_end, carried_past_link
 
 F, R = Strand.FORWARD, Strand.REVERSE
@@ -34,12 +34,12 @@ def _records(rows, strands=None):
     return [batch.get_record(i) for i in range(len(batch))]
 
 
-def _engine(lengths, edges):
-    return TopologyEngine(list(edges), lengths, {c: 1.0 for c in lengths})
+def _graph(lengths, edges):
+    return AssemblyGraph(edges, lengths)
 
 
 # Past the contig end a flank walk leaves by (#66) ---------------------------------------------------------------------
-A_TO_B = _engine({"ctgA": 1000, "ctgB": 1000}, [Edge("ctgA", F, "ctgB", F, overlap=100)])
+A_TO_B = _graph({"ctgA": 1000, "ctgB": 1000}, [Edge("ctgA", F, "ctgB", F, overlap=100)])
 
 
 @pytest.mark.parametrize("strand, aln, side", [
@@ -76,7 +76,7 @@ def test_a_target_starting_at_its_contigs_start_runs_back_past_it_upstream(stran
     edges = [Edge("ctgU", F, "ctgX", F)] if strand == F else [Edge("ctgX", F, "ctgU", F)]
     records = _records([(1000, 200, 500, "ctgX", 300, 0, 300)], [strand])
 
-    assert beyond_contig_end(records, strand, UP, _engine({"ctgU": 1000, "ctgX": 300}, edges)) == 200
+    assert beyond_contig_end(records, strand, UP, _graph({"ctgU": 1000, "ctgX": 300}, edges)) == 200
 
 
 def test_a_target_runs_on_past_the_contig_end_by_the_alignment_nearest_it():
