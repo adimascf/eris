@@ -7,12 +7,11 @@ a contig are merged, and which links leave it; each keeps its own walk out of it
 from dataclasses import dataclass
 from typing import Iterable, Iterator, TYPE_CHECKING
 
-from eris.graph import STRICT_SLACK, Edge, EndOverlaps, Graph
+from eris.graph import STRICT_SLACK, AssemblyGraph, Edge
 from eris.interval import Strand
 
 if TYPE_CHECKING:
     from eris.alignment import AlignmentRecord
-    from eris.io import GenomeAssembly
     from eris.pipeline import Locus
 
 # Classes --------------------------------------------------------------------------------------------------------------
@@ -44,22 +43,14 @@ class Hubs:
     Finds the repeat hubs of an assembly's stitched paths and loci, merges those that share a contig, and gives the
     links that leave them.
     """
-    __slots__ = ('graph', 'contig_lengths', '_end_overlaps')
+    __slots__ = ('_graph',)
 
-    def __init__(self, edges: list[Edge], contig_lengths: dict[str, int]):
-        # A GFA link is written once but holds on both strands, so add its complement for walking the other way
-        self.graph = Graph(edges + [e.complement() for e in edges])
-        self.contig_lengths = contig_lengths
-        self._end_overlaps = EndOverlaps(edges)
-
-    @classmethod
-    def from_genome(cls, genome: 'GenomeAssembly') -> 'Hubs':
-        """The hubs of an assembly, from its links and contig lengths."""
-        return cls(list(genome.edges), genome.contig_lengths)
+    def __init__(self, graph: AssemblyGraph):
+        self._graph = graph
 
     def _covers(self, contig: str, start: int, end: int) -> bool:
         """True if `start` to `end` covers `contig` end to end: each end within its links' overlap plus STRICT_SLACK."""
-        return self._end_overlaps.reaches_both(contig, self.contig_lengths[contig], start, end, STRICT_SLACK)
+        return self._graph.reaches_both(contig, start, end, STRICT_SLACK)
 
     @staticmethod
     def _hub(covered: Iterable[tuple[str, Strand]]) -> RepeatHub:
@@ -107,7 +98,7 @@ class Hubs:
 
     def _links_out(self, contig: str, strand: Strand, side: int, hub: RepeatHub) -> list[Edge]:
         """The links out of `contig`, read on `strand`, on `side` (see `leaving`) to a contig outside `hub`."""
-        return [e for e in self.graph.get_neighbors(contig) if e.u_strand == strand * side and e.v not in hub]
+        return [e for e in self._graph.links_from(contig, Strand(strand * side)) if e.v not in hub]
 
     def leaving(self, hub: RepeatHub, side: int) -> list[Edge]:
         """

@@ -1,8 +1,8 @@
 from Bio.Seq import Seq
 
 from eris.constants import FeatureType, Strand
-from eris.copy_number import assign_copy_numbers
-from eris.graph import Edge
+from eris.copy_number import assign_copy_numbers as _assign
+from eris.graph import AssemblyGraph, Edge
 from eris.io import GenomeAssembly
 from eris.pipeline import GenomicFeature, LocationSegment, Locus
 
@@ -14,6 +14,10 @@ def genome(contigs: dict[str, tuple[int, float]], edges: list[Edge]) -> GenomeAs
     lengths = {c: n for c, (n, _) in contigs.items()}
     depths = {c: d for c, (_, d) in contigs.items()}
     return GenomeAssembly("test", {c: Seq("A" * n) for c, n in lengths.items()}, edges, depths, lengths)
+
+
+def assign_copy_numbers(loci: list[Locus], genome: GenomeAssembly) -> None:
+    _assign(loci, genome, AssemblyGraph.from_genome(genome))
 
 
 def locus(name: str, *segments: tuple[str, int, int, Strand]) -> Locus:

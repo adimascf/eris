@@ -1,4 +1,4 @@
-from typing import NamedTuple, Iterable, KeysView, Callable
+from typing import NamedTuple, Iterable, Mapping, Callable, TYPE_CHECKING
 from collections import defaultdict
 from functools import partial
 
@@ -6,6 +6,9 @@ import numpy as np
 
 from eris.interval import Strand
 from eris.alignment import AlignmentBatch, AlignmentRecord
+
+if TYPE_CHECKING:
+    from eris.io import GenomeAssembly
 
 OVERLAP_SLACK = 50  # bp a fragment may stop short of, or overlap, a link beyond the link's own overlap
 STRICT_SLACK = 10  # bp a hub contig's or branch's target may miss an end by: a false reach pulls in other sequence (#85)
@@ -43,35 +46,6 @@ def is_self_link(edge: Edge) -> bool:
     return edge.u == edge.v and edge.u_strand == edge.v_strand
 
 
-class EndOverlaps:
-    """
-    The largest overlap of the links at each contig end, 0 at a dead end: what an alignment may stop short of that end
-    by, plus a slack, and still reach it (#85).
-    """
-    __slots__ = ('_exit',)
-
-    def __init__(self, edges: Iterable[Edge]):
-        # A link leaves `u` by its end on '+' or its start on '-', and enters `v` by the other end; its complement
-        # leaves `v` by that end, so keying each link and its complement by where it leaves covers both
-        self._exit: dict[tuple[str, Strand], int] = defaultdict(int)
-        for e in edges:
-            for key in ((e.u, e.u_strand), (e.v, Strand(-e.v_strand))):
-                self._exit[key] = max(self._exit[key], e.overlap)
-
-    def exit(self, contig: str, strand: Strand) -> int:
-        """The largest overlap of a link leaving `contig` read on `strand`, so by its end or, on '-', its start."""
-        return self._exit.get((contig, strand), 0)
-
-    def entry(self, contig: str, strand: Strand) -> int:
-        """The largest overlap of a link entering `contig` read on `strand`, so by its start or, on '-', its end."""
-        return self.exit(contig, Strand(-strand))
-
-    def reaches_both(self, contig: str, length: int, start: int, end: int, slack: int) -> bool:
-        """True if `start` to `end` on `contig`, of `length`, reaches each end within its links' overlap plus `slack`."""
-        return (start <= self.exit(contig, Strand.REVERSE) + slack
-                and length - end <= self.exit(contig, Strand.FORWARD) + slack)
-
-
 def circular_contigs(edges: Iterable[Edge]) -> frozenset[str]:
     """
     Contigs whose only link is a self-link (ADR 0001). A self-link alongside links to other contigs is a collapsed
@@ -87,92 +61,74 @@ def circular_contigs(edges: Iterable[Edge]) -> frozenset[str]:
     return frozenset(self_linked - linked_elsewhere)
 
 
-class Graph:
+class AssemblyGraph:
     """
-    Manages an assembly graph, supporting both directed and undirected traversal.
+    The assembly graph: the contigs of an assembly and the links between their ends. It is built once per assembly and
+    shared by stitching, repeat hubs, the flank search and copy number's anchor walk, each of which runs its own walk
+    over it (docs/adr/0008).
 
-    Nodes represent contigs (or fragments), and edges represent physical
-    adjacencies (e.g., from an assembly GFA file).
-
-    Example:
-        >>> graph = Graph(directed=True)
-        >>> graph.add_edge(Edge("ctg1", Strand.FORWARD, "ctg2", Strand.FORWARD, 50))
-        >>> neighbors = graph.get_neighbors("ctg1")
+    A GFA link is written once but holds on both strands, so every link is also read as its complement. The links
+    leaving a contig come back in the order they were read, each link before the complements: that order decides which
+    flanks are reported.
     """
-    __slots__ = ('adj', 'in_adj', 'edges', '_nodes', 'directed')
-    def __init__(self, edges: Iterable[Edge] = None, directed: bool = True):
+    __slots__ = ('contig_lengths', 'circular', '_out', '_exit', '_overlap')
+
+    def __init__(self, edges: Iterable[Edge], contig_lengths: Mapping[str, int], circular: Iterable[str] = ()):
         """
-        Initialize the graph.
-
         Args:
-            edges: Optional iterable of Edge objects to seed the graph.
-            directed: If True, edges are strictly one-way. If False, every
-                added edge u -> v implicitly adds v -> u.
+            edges: The links, each written once.
+            contig_lengths: Each contig's length.
+            circular: Circular contigs, each closed by a self-link among `edges` (docs/adr/0001).
         """
-        # Adjacency list: maps node ID to a set of outgoing Edge objects *starting* uom that node.
-        # For undirected graphs, this will include edges representing reverse traversal.
-        # Edges are kept in dicts (ordered sets): a set's order depends on the string hash seed, which made
-        # traversal, and so the reported flanks, change between runs on the same assembly
-        self.adj: dict[str, dict[Edge, None]] = defaultdict(dict)
-        # In-degree adjacency list for efficient reverse lookups
-        self.in_adj: dict[str, dict[Edge, None]] = defaultdict(dict)
-        # Set of unique Edge objects fundamentally added to the graph.
-        self.edges: set[Edge] = set()
-        self._nodes: set[str] = set()
-        self.directed: bool = directed
-        if edges is not None:
-            for edge in edges:
-                self.add_edge(edge)
-    
-    def __repr__(self):
-        # Note: len(self.edges) counts only the *unique* edge objects added,
-        # not the total number of traversable connections in the undirected case.
-        return f"{'Directed' if self.directed else 'Undirected'} Graph with {len(self._nodes)} nodes and {len(self.edges)} defined edges"
+        edges = list(edges)
+        self.contig_lengths: Mapping[str, int] = contig_lengths
+        self.circular: frozenset[str] = frozenset(circular)
+        # Links are kept in dicts (ordered sets): a set's order depends on the string hash seed, which made traversal,
+        # and so the reported flanks, change between runs on the same assembly
+        self._out: dict[tuple[str, Strand], dict[Edge, None]] = defaultdict(dict)
+        for e in edges + [e.complement() for e in edges]:
+            self._out[(e.u, e.u_strand)][e] = None
+        # A link leaves `u` by its end on '+' or its start on '-', and enters `v` by the other end; its complement
+        # leaves `v` by that end, so keying each link and its complement by where it leaves covers both
+        self._exit: dict[tuple[str, Strand], int] = defaultdict(int)
+        self._overlap: dict[Edge, int] = {}
+        for e in edges:
+            for key in ((e.u, e.u_strand), (e.v, Strand(-e.v_strand))):
+                self._exit[key] = max(self._exit[key], e.overlap)
+            for side in (e, e.complement()):
+                self._overlap.setdefault(side._replace(overlap=0), e.overlap)
 
-    def __iter__(self):
-        return iter(self.edges)
+    @classmethod
+    def from_genome(cls, genome: 'GenomeAssembly') -> 'AssemblyGraph':
+        """The assembly graph of a genome assembly, from its links, contig lengths and circular contigs."""
+        return cls(genome.edges, genome.contig_lengths, genome.circular)
 
-    def __len__(self):
-        return len(self.edges)
-
-    def add_node(self, node: str):
-        """Adds a node to the graph if it doesn't already exist."""
-        self._nodes.add(node)
-
-    def add_edge(self, edge: Edge):
+    def links_from(self, contig: str, strand: Strand) -> list[Edge]:
         """
-        Adds an edge to the graph.
-
-        If the graph is undirected, the reverse connection is also added
-        to the adjacency lists to allow bidirectional traversal.
+        The links leaving `contig` read on `strand`, so by its end or, on '-', its start, in the order they were read,
+        each link's complement included.
         """
-        # Add the nodes to the set of known node IDs
-        self.add_node(edge.u)
-        self.add_node(edge.v)
+        return list(self._out.get((contig, strand), ()))
 
-        # This helps track the originally added edges vs implicit reverse ones
-        self.edges.add(edge)  # Add the primary edge representation if it's new
+    def overlap(self, u: str, u_strand: Strand, v: str, v_strand: Strand) -> int:
+        """The overlap of the link 'u -> v' read on the given strands, either way it was written, or 0 if none."""
+        return self._overlap.get(Edge(u, u_strand, v, v_strand), 0)
 
-        # Check if this specific edge object is already in the adjacency list for the 'u' node
-        self.adj[edge.u][edge] = None
-        self.in_adj[edge.v][edge] = None
-
-        # If the graph is undirected, add reverse connectivity as well
-        if not self.directed:
-            # Create a conceptual reverse edge for traversal and add to the adjacency list of the 'v' node
-            reverse_edge = edge.reverse()
-            self.in_adj[edge.u][reverse_edge] = None
-            self.adj[edge.v][reverse_edge] = None
-            # Note: We do not add the reverse_edge to self.edges unless it's explicitly added later by the user
-
-    def get_neighbors(self, node_id: str) -> KeysView[Edge]:
+    def exit_overlap(self, contig: str, strand: Strand) -> int:
         """
-        Returns the outgoing edges for a given node ID, in the order they were added.
-
-        Respects graph directionality. For undirected graphs, this includes
-        implicit reverse connections.
+        The largest overlap of a link leaving `contig` read on `strand`, so by its end or, on '-', its start; 0 at a
+        dead end. An alignment may stop short of that end by this, plus a slack, and still reach it (#85).
         """
-        return self.adj.get(node_id, {}).keys()
+        return self._exit.get((contig, strand), 0)
+
+    def entry_overlap(self, contig: str, strand: Strand) -> int:
+        """The largest overlap of a link entering `contig` read on `strand`, so by its start or, on '-', its end."""
+        return self.exit_overlap(contig, Strand(-strand))
+
+    def reaches_both(self, contig: str, start: int, end: int, slack: int) -> bool:
+        """True if `start` to `end` on `contig` reaches each of its ends within its links' overlap plus `slack`."""
+        return (start <= self.exit_overlap(contig, Strand.REVERSE) + slack
+                and self.contig_lengths[contig] - end <= self.exit_overlap(contig, Strand.FORWARD) + slack)
 
 
 class TopologyEngine:
@@ -182,30 +138,20 @@ class TopologyEngine:
     It provides tools for "stitching" together partial alignments that span
     multiple contigs by finding valid physical paths through the graph.
     """
-    __slots__ = ('_graph', 'contig_lengths', 'contig_depths', 'mode', '_end_overlaps', 'circular')
+    __slots__ = ('graph', 'contig_depths', 'mode')
 
-    def __init__(self, edges: Iterable[Edge], contig_lengths: dict[str, int], contig_depths: dict[str, float],
-                 mode: str = 'variant', circular: Iterable[str] = ()):
+    def __init__(self, graph: AssemblyGraph, contig_depths: dict[str, float], mode: str = 'variant'):
         """
         Initialize the TopologyEngine.
 
         Args:
-            edges: Assembly graph edges.
-            contig_lengths: Dictionary mapping contig ID to length in bp.
+            graph: The assembly graph.
             contig_depths: Dictionary mapping contig ID to read depth.
             mode: 'variant' or 'collapse'.
-            circular: Circular contigs, each closed by a self-link among `edges` (ADR 0001).
         """
-        # A GFA link is written once but holds on both strands, so add its complement for walking the other way
-        edges = list(edges)
-        self._graph = Graph(edges + [e.complement() for e in edges])
-        self._end_overlaps = EndOverlaps(edges)
-        self.contig_lengths: dict[str, int] = contig_lengths
+        self.graph: AssemblyGraph = graph
         self.contig_depths: dict[str, float] = contig_depths
-        self.circular: frozenset[str] = frozenset(circular)
-
         self.mode: str = mode
-
 
     def resolve_split_alignments(self, alignments: dict) -> tuple[dict, list[list['AlignmentRecord']]]:
         """
@@ -243,8 +189,8 @@ class TopologyEngine:
             # Shortcuts for _fits, to skip the graph search, by the largest link overlap at each end: a fragment that
             # doesn't reach its contig end by it reaches it by no link's, and as a link never overlaps more than either
             # contig's length, no path overlaps itself by more either
-            exit_overlaps = [self._end_overlaps.exit(f.t_name, f.strand) for f in fragments]
-            entry_overlaps = [self._end_overlaps.entry(f.t_name, f.strand) for f in fragments]
+            exit_overlaps = [self.graph.exit_overlap(f.t_name, f.strand) for f in fragments]
+            entry_overlaps = [self.graph.entry_overlap(f.t_name, f.strand) for f in fragments]
             can_leave = [f.hangs_3p(o + OVERLAP_SLACK) for f, o in zip(fragments, exit_overlaps)]
             can_enter = [f.hangs_5p(o + OVERLAP_SLACK) for f, o in zip(fragments, entry_overlaps)]
 
@@ -410,7 +356,7 @@ class TopologyEngine:
 
         # Iterate over only the intermediate contigs (excluding the h_u and h_v anchors)
         for ctg, strand in zip(path_contigs[1:-1], path_strands[1:-1]):
-            ctg_len = self.contig_lengths.get(ctg, 0)
+            ctg_len = self.graph.contig_lengths.get(ctg, 0)
 
             # Create a synthetic alignment that claims the entire unaligned contig
             synthetic_rec = AlignmentRecord(
@@ -476,15 +422,12 @@ class TopologyEngine:
                 continue
 
             # Graph Traversal
-            for edge in self._graph.get_neighbors(curr_ctg):
-                if edge.u_strand != curr_strand:
-                    continue
-
+            for edge in self.graph.links_from(curr_ctg, curr_strand):
                 n_ctg = edge.v
                 if n_ctg in path:
                     continue  # Prevent cyclic infinite loops
 
-                n_len = self.contig_lengths.get(n_ctg, 0)
+                n_len = self.graph.contig_lengths.get(n_ctg, 0)
                 n_dp = self.contig_depths.get(n_ctg, 1.0)
                 overlap_len = getattr(edge, 'overlap', 0)
 
@@ -531,15 +474,15 @@ class TopologyEngine:
                 continue
 
             # Greedy Graph Traversal: push the shallowest first so the deepest valid neighbor is popped next
-            neighbors = [e for e in self._graph.get_neighbors(curr_ctg)
-                         if e.u_strand == curr_strand and e.v not in path]  # Prevent cyclic infinite loops
+            neighbors = [e for e in self.graph.links_from(curr_ctg, curr_strand)
+                         if e.v not in path]  # Prevent cyclic infinite loops
             # Sort on the name too, as set order is not stable between runs
             neighbors.sort(key=lambda e: (self.contig_depths.get(e.v, 1.0), e.v))
 
             for edge in neighbors:
                 n_ctg = edge.v
                 n_dp = self.contig_depths.get(n_ctg, 1.0)
-                n_len = self.contig_lengths.get(n_ctg, 0)
+                n_len = self.graph.contig_lengths.get(n_ctg, 0)
                 overlap_len = getattr(edge, 'overlap', 0)
 
                 # Absolute normalization for target anchor
@@ -557,14 +500,3 @@ class TopologyEngine:
 
         # If it reaches a dead end before finding the target anchor
         return []
-
-    def exit_overlap(self, contig: str, strand: Strand) -> int:
-        """The largest overlap of any link leaving `contig` read on `strand`, so by its end or, on '-', its start."""
-        return self._end_overlaps.exit(contig, strand)
-
-    def links_from(self, contig: str, strand: Strand) -> list[Edge]:
-        """
-        The links leaving `contig` read on `strand`, so by its end or, on '-', its start, in the order they were read,
-        each link's complement included.
-        """
-        return [e for e in self._graph.get_neighbors(contig) if e.u_strand == strand]

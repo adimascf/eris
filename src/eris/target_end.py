@@ -7,12 +7,12 @@ from typing import Optional
 
 from eris.alignment import AlignmentBatch, AlignmentRecord
 from eris.constants import Context, Strand
-from eris.graph import OVERLAP_SLACK, STRICT_SLACK, Edge, TopologyEngine
+from eris.graph import OVERLAP_SLACK, STRICT_SLACK, AssemblyGraph, Edge
 
 
 # Functions ------------------------------------------------------------------------------------------------------------
 def beyond_contig_end(records: Iterable[AlignmentRecord], strand: Strand, side: Context,
-                      topology_engine: TopologyEngine) -> int:
+                      graph: AssemblyGraph) -> int:
     """
     How much of a locus's target runs on past the contig end a flank walk leaves by (#66): the target bases an
     alignment leaves unaligned at that end, when it reaches the end within the largest overlap of a link leaving it
@@ -25,7 +25,7 @@ def beyond_contig_end(records: Iterable[AlignmentRecord], strand: Strand, side: 
         records: The locus's alignments on the contig.
         strand: The strand the locus is read on, which sets which contig end is upstream.
         side: Context.UPSTREAM or Context.DOWNSTREAM, the side the flank walk leaves by.
-        topology_engine: The assembly graph, for the overlaps of the links leaving the contig.
+        graph: The assembly graph, for the overlaps of the links leaving the contig.
     """
     walk_direction = strand if side == Context.DOWNSTREAM else -strand
     exit_strand = Strand.FORWARD if walk_direction == 1 else Strand.REVERSE
@@ -33,7 +33,7 @@ def beyond_contig_end(records: Iterable[AlignmentRecord], strand: Strand, side: 
     for rec in records:
         if rec.idx == -1:
             continue
-        tolerance = topology_engine.exit_overlap(rec.t_name, exit_strand) + OVERLAP_SLACK
+        tolerance = graph.exit_overlap(rec.t_name, exit_strand) + OVERLAP_SLACK
         gap = rec.t_length - rec.t_end if walk_direction == 1 else rec.t_start
         if gap > tolerance:
             continue

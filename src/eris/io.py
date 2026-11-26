@@ -208,13 +208,6 @@ class GenomeAssembly:
         """Access a contig sequence by its ID."""
         return self.contigs[item]
 
-    def overlap(self, u: str, u_strand: Strand, v: str, v_strand: Strand) -> int:
-        """The edge overlap of the link 'u -> v' read on the given strands, or 0 if the assembly has no such link."""
-        # A link is written once in the GFA but holds on both strands, so also match its complement
-        link = Edge(u, u_strand, v, v_strand)
-        return next((e.overlap for e in self.edges for side in (e, e.complement())
-                     if side._replace(overlap=0) == link), 0)
-
     @classmethod
     def from_file(cls, file: Union[str, Path]):
         """
