@@ -34,9 +34,11 @@ def test_a_contig_is_in_the_hub_only_if_the_target_covers_it_end_to_end():
     assert path.contigs == (("hub", F),)
 
 
-# A contig linked by 127 bp at its end and nowhere at its start, and one linked by 127 bp at both ends (#85)
-MIXED = hubs({"is": 1300, "rep": 1300, "left": 5000, "right": 5000},
-             [Edge("is", F, "right", F, 127), Edge("left", F, "rep", F, 127), Edge("rep", F, "right", F, 127)])
+# Contigs linked by 127 bp at their end only (is), at both ends (rep), and at their start only, by a link leaving
+# backwards (back) (#85)
+MIXED = hubs({"is": 1300, "rep": 1300, "back": 1300, "left": 5000, "right": 5000},
+             [Edge("is", F, "right", F, 127), Edge("left", F, "rep", F, 127), Edge("rep", F, "right", F, 127),
+              Edge("back", R, "left", R, 127)])
 
 
 @pytest.mark.parametrize("rec, covered", [
@@ -47,6 +49,8 @@ MIXED = hubs({"is": 1300, "rep": 1300, "left": 5000, "right": 5000},
     (record("is", 1300, 0, 1162), False),
     (record("rep", 1300, 100, 1200), True),  # each end judged on its own, not their shortfalls summed
     (record("is", 1300, 0, 1163, R), True),  # a contig's ends are on its forward strand, whichever way it is read
+    (record("back", 1300, 137, 1300), True),  # a link leaving on '-' leaves by the contig's start
+    (record("back", 1300, 0, 1163), False),
 ])
 def test_each_contig_end_is_reached_within_its_own_links_overlap(rec, covered):
     assert bool(MIXED.of_path([rec])) == covered
