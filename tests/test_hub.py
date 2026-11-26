@@ -1,3 +1,4 @@
+import pytest
 from typing import Iterable
 
 from eris.alignment import AlignmentRecord
@@ -24,12 +25,42 @@ def hubs(lengths: dict[str, int], edges: Iterable[Edge] = ()) -> Hubs:
 
 
 def test_a_contig_is_in_the_hub_only_if_the_target_covers_it_end_to_end():
-    # Links overlap by 50, so a target may stop 50 + END_SLOP short of a contig's ends
-    h = hubs({"a": 5000, "hub": 800, "short": 800, "b": 5000}, [Edge("a", F, "hub", F, 50)])
+    # Links overlap by 50, so a target may stop 50 + STRICT_SLACK short of a contig's linked ends
+    h = hubs({"a": 5000, "hub": 800, "short": 800, "b": 5000},
+             [Edge("a", F, "hub", F, 50), Edge("hub", F, "b", F, 50)])
 
     path = h.of_path([record("a", 5000, 4800, 5000), record("hub", 800, 30, 770), record("short", 800, 0, 700)])
 
     assert path.contigs == (("hub", F),)
+
+
+# Contigs linked by 127 bp at their end only (is), at both ends (rep), and at their start only, by a link leaving
+# backwards (back) (#85)
+MIXED = hubs({"is": 1300, "rep": 1300, "back": 1300, "left": 5000, "right": 5000},
+             [Edge("is", F, "right", F, 127), Edge("left", F, "rep", F, 127), Edge("rep", F, "right", F, 127),
+              Edge("back", R, "left", R, 127)])
+
+
+@pytest.mark.parametrize("rec, covered", [
+    (record("is", 1300, 120, 1300), False),  # 120 bp short of a dead end is unique sequence beside the target
+    (record("is", 1300, 11, 1300), False),  # past STRICT_SLACK at the dead end
+    (record("is", 1300, 10, 1300), True),
+    (record("is", 1300, 0, 1163), True),  # 137 bp short of the linked end: its overlap plus STRICT_SLACK
+    (record("is", 1300, 0, 1162), False),
+    (record("rep", 1300, 100, 1200), True),  # each end judged on its own, not their shortfalls summed
+    (record("is", 1300, 0, 1163, R), True),  # a contig's ends are on its forward strand, whichever way it is read
+    (record("back", 1300, 137, 1300), True),  # a link leaving on '-' leaves by the contig's start
+    (record("back", 1300, 0, 1163), False),
+])
+def test_each_contig_end_is_reached_within_its_own_links_overlap(rec, covered):
+    assert bool(MIXED.of_path([rec])) == covered
+
+
+def test_a_contig_entered_backwards_has_its_links_overlap_at_the_end_it_is_entered_by():
+    # left's end joins is's end, read backwards: is's end carries the 127 bp, its start is a dead end
+    h = hubs({"is": 1300, "left": 5000}, [Edge("left", F, "is", R, 127)])
+
+    assert h.of_locus(locus(("is", 0, 1163, R))) and not h.of_locus(locus(("is", 120, 1300, R)))
 
 
 def test_the_hub_holds_each_contig_with_its_strand_in_path_order():

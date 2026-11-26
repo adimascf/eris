@@ -8,6 +8,7 @@ from eris.interval import Strand
 from eris.alignment import AlignmentBatch, AlignmentRecord
 
 OVERLAP_SLACK = 50  # bp a fragment may stop short of, or overlap, a link beyond the link's own overlap
+STRICT_SLACK = 10  # bp a hub contig's or branch's target may miss an end by: a false reach pulls in other sequence (#85)
 
 
 # Classes --------------------------------------------------------------------------------------------------------------
@@ -40,6 +41,35 @@ class Edge(NamedTuple):
 def is_self_link(edge: Edge) -> bool:
     """Returns whether the link joins a contig's end back to its own start: 'A+ -> A+', or the same as 'A- -> A-'."""
     return edge.u == edge.v and edge.u_strand == edge.v_strand
+
+
+class EndOverlaps:
+    """
+    The largest overlap of the links at each contig end, 0 at a dead end: what an alignment may stop short of that end
+    by, plus a slack, and still reach it (#85).
+    """
+    __slots__ = ('_exit',)
+
+    def __init__(self, edges: Iterable[Edge]):
+        # A link leaves `u` by its end on '+' or its start on '-', and enters `v` by the other end; its complement
+        # leaves `v` by that end, so keying each link and its complement by where it leaves covers both
+        self._exit: dict[tuple[str, Strand], int] = defaultdict(int)
+        for e in edges:
+            for key in ((e.u, e.u_strand), (e.v, Strand(-e.v_strand))):
+                self._exit[key] = max(self._exit[key], e.overlap)
+
+    def exit(self, contig: str, strand: Strand) -> int:
+        """The largest overlap of a link leaving `contig` read on `strand`, so by its end or, on '-', its start."""
+        return self._exit.get((contig, strand), 0)
+
+    def entry(self, contig: str, strand: Strand) -> int:
+        """The largest overlap of a link entering `contig` read on `strand`, so by its start or, on '-', its end."""
+        return self.exit(contig, Strand(-strand))
+
+    def reaches_both(self, contig: str, length: int, start: int, end: int, slack: int) -> bool:
+        """True if `start` to `end` on `contig`, of `length`, reaches each end within its links' overlap plus `slack`."""
+        return (start <= self.exit(contig, Strand.REVERSE) + slack
+                and length - end <= self.exit(contig, Strand.FORWARD) + slack)
 
 
 def circular_contigs(edges: Iterable[Edge]) -> frozenset[str]:
@@ -152,7 +182,7 @@ class TopologyEngine:
     It provides tools for "stitching" together partial alignments that span
     multiple contigs by finding valid physical paths through the graph.
     """
-    __slots__ = ('_graph', 'contig_lengths', 'contig_depths', 'mode', '_end_overlap', 'circular')
+    __slots__ = ('_graph', 'contig_lengths', 'contig_depths', 'mode', '_end_overlaps', 'circular')
 
     def __init__(self, edges: Iterable[Edge], contig_lengths: dict[str, int], contig_depths: dict[str, float],
                  mode: str = 'variant', circular: Iterable[str] = ()):
@@ -169,11 +199,7 @@ class TopologyEngine:
         # A GFA link is written once but holds on both strands, so add its complement for walking the other way
         edges = list(edges)
         self._graph = Graph(edges + [e.complement() for e in edges])
-        # The largest overlap of any link leaving each contig on each strand, and of any arriving at it
-        self._end_overlap: dict[tuple[str, Strand, bool], int] = defaultdict(int)
-        for e in edges + [e.complement() for e in edges]:
-            for key in ((e.u, e.u_strand, True), (e.v, e.v_strand, False)):
-                self._end_overlap[key] = max(self._end_overlap[key], e.overlap)
+        self._end_overlaps = EndOverlaps(edges)
         self.contig_lengths: dict[str, int] = contig_lengths
         self.contig_depths: dict[str, float] = contig_depths
         self.circular: frozenset[str] = frozenset(circular)
@@ -217,8 +243,8 @@ class TopologyEngine:
             # Shortcuts for _fits, to skip the graph search, by the largest link overlap at each end: a fragment that
             # doesn't reach its contig end by it reaches it by no link's, and as a link never overlaps more than either
             # contig's length, no path overlaps itself by more either
-            exit_overlaps = [self._end_overlap[f.t_name, f.strand, True] for f in fragments]
-            entry_overlaps = [self._end_overlap[f.t_name, f.strand, False] for f in fragments]
+            exit_overlaps = [self._end_overlaps.exit(f.t_name, f.strand) for f in fragments]
+            entry_overlaps = [self._end_overlaps.entry(f.t_name, f.strand) for f in fragments]
             can_leave = [f.hangs_3p(o + OVERLAP_SLACK) for f, o in zip(fragments, exit_overlaps)]
             can_enter = [f.hangs_5p(o + OVERLAP_SLACK) for f, o in zip(fragments, entry_overlaps)]
 
@@ -534,7 +560,7 @@ class TopologyEngine:
 
     def exit_overlap(self, contig: str, strand: Strand) -> int:
         """The largest overlap of any link leaving `contig` read on `strand`, so by its end or, on '-', its start."""
-        return self._end_overlap.get((contig, strand, True), 0)
+        return self._end_overlaps.exit(contig, strand)
 
     def links_from(self, contig: str, strand: Strand) -> list[Edge]:
         """

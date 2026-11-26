@@ -7,11 +7,7 @@ from typing import Optional
 
 from eris.alignment import AlignmentBatch, AlignmentRecord
 from eris.constants import Context, Strand
-from eris.graph import OVERLAP_SLACK, Edge, TopologyEngine
-
-
-# Constants ------------------------------------------------------------------------------------------------------------
-BRANCH_ENTRY_SLACK = 10  # bp into a hub branch's first contig a copy's target may start and still run on from the hub
+from eris.graph import OVERLAP_SLACK, STRICT_SLACK, Edge, TopologyEngine
 
 
 # Functions ------------------------------------------------------------------------------------------------------------
@@ -55,7 +51,7 @@ def carried_past_link(link: Edge, alignments: Mapping[str, AlignmentBatch], cont
     """
     How far a copy's target runs onto a hub branch's first contig `link.v` past the overlap it shares with the hub
     (#65), read along the walk: the furthest end of an alignment that starts where the contig is entered, within
-    BRANCH_ENTRY_SLACK. 0 if none does. The hub's edge is target end to end, so a copy carrying on past it starts in
+    STRICT_SLACK. 0 if none does. The hub's edge is target end to end, so a copy carrying on past it starts in
     the overlap; an alignment starting past it is another IS beside this one.
 
     Args:
@@ -71,7 +67,7 @@ def carried_past_link(link: Edge, alignments: Mapping[str, AlignmentBatch], cont
     else:
         length = contig_lengths[link.v]
         starts, ends = length - batch.t_ends, length - batch.t_starts
-    entering = starts <= BRANCH_ENTRY_SLACK
+    entering = starts <= STRICT_SLACK
     if not entering.any():
         return 0
     return max(0, int(ends[entering].max()) - link.overlap)
