@@ -89,7 +89,7 @@ class LocusEnds:
 
     def _branch_links(self, fragments: list[AlignmentRecord]) -> tuple[list[Edge], list[Edge]]:
         """
-        The links leaving a stitched path's repeat hub upstream and downstream, other than those the flank walk from
+        The links leaving a stitched path's repeat hub upstream and downstream, other than those the flank search from
         the path's own end contig already follows (#56). A hub reported once stands for every copy collapsed into it,
         so each of its links is a branch with its own flanks. Only the links leaving the hub's outermost contig on each
         side count (see `Hubs.leaving_outermost`). None without hub branches.
@@ -106,7 +106,7 @@ class LocusEnds:
             if end.t_name == outer:  # the walk starts on the hub's edge, so it already leaves by every link
                 links_by_side.append([])
                 continue
-            # The walk from the end contig is the branch along the link into it
+            # The search from the end contig follows the branch along the link into it
             links_by_side.append([e for e in self._hubs.leaving_outermost(hub, side)
                                   if (e.v, e.v_strand) != (end.t_name, end.strand * side)])
         return links_by_side[0], links_by_side[1]
@@ -116,7 +116,7 @@ class LocusEnds:
 def _beyond_contig_end(records: Iterable[AlignmentRecord], strand: Strand, side: Context,
                        graph: AssemblyGraph) -> int:
     """
-    How much of a locus's target runs on past the contig end a flank walk leaves by (#66): the target bases an
+    How much of a locus's target runs on past the contig end a flank search leaves by (#66): the target bases an
     alignment leaves unaligned at that end, when it reaches the end within the largest overlap of a link leaving it
     plus OVERLAP_SLACK and those bases are more than the contig has left, so the rest of the copy is on the next
     contig. Of several alignments that do, the one nearest the end counts. 0 if none does: an alignment that stops
@@ -126,7 +126,7 @@ def _beyond_contig_end(records: Iterable[AlignmentRecord], strand: Strand, side:
     Args:
         records: The locus's alignments on the contig.
         strand: The strand the locus is read on, which sets which contig end is upstream.
-        side: Context.UPSTREAM or Context.DOWNSTREAM, the side the flank walk leaves by.
+        side: Context.UPSTREAM or Context.DOWNSTREAM, the side the flank search leaves by.
         graph: The assembly graph, for the overlaps of the links leaving the contig.
     """
     walk_direction = strand if side == Context.DOWNSTREAM else -strand

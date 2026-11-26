@@ -325,7 +325,7 @@ def test_a_local_gene_overlapping_the_is_upstream_end_overlaps_its_start_and_dow
     assert _relation_summary(locus.passengers) == [("gene_ctgA", context, 0, "DISRUPTED")]
 
 
-def _hub_locus(mode):
+def _hub_locus(mode, extra_alignments=None):
     """
     IS1 runs off the end of a1, across the unaligned 1 kb 'hub', and into the start of b1. The hub is a collapsed
     repeat: a2 also links into it, and b2 (sharing 100 bp) and b3 (entered backwards) also leave it.
@@ -341,7 +341,7 @@ def _hub_locus(mode):
     alignments = {
         "a1": _batch([("IS1", 1600, 0, 300, "a1", 5000, 4700, 5000, 300, 300)]),
         "b1": _batch([("IS1", 1600, 1300, 1600, "b1", 1000, 0, 300, 300, 300)]),
-    }
+    } | (extra_alignments or {})
     [locus] = builder.assemble(alignments, min_coverage=0.30, min_identity=0.0)
     return locus
 
@@ -359,6 +359,23 @@ def test_collapse_mode_walks_a_hubs_flanks_from_every_link_leaving_it():
     assert _flank_relations(locus.downstream_flanks) == [
         ("gene_b1", 200, 0), ("gene_b2", 200, 1), ("gene_b3", 250, 1)]
     assert _flank_relations(locus.upstream_flanks) == [("gene_a1", 200, 0), ("gene_a2", 400, 1)]
+
+
+def test_a_hub_branch_is_measured_from_where_its_own_copys_target_ends():
+    # IS1B, near-identical to IS1, is another copy's target, aligned on one contig each so it stitches no path of its
+    # own. It runs past the hub onto b2 and b3: on b2 to 200, 100 bp past the overlap, so its gene at
+    # 300 is 100 bp away; on b3, read backwards, its last 150 bp, so the gene starting 250 bp in is 100 bp away.
+    # Upstream, a2 ends with its copy's first 200 bp, 200 bp short of the gene's end at 4600
+    alignments = {
+        "b2": _batch([("IS1B", 1600, 1400, 1600, "b2", 1000, 0, 200, 200, 200)]),
+        "b3": _batch([("IS1B", 1600, 1450, 1600, "b3", 1000, 850, 1000, 150, 150)], [Strand.REVERSE]),
+        "a2": _batch([("IS1B", 1600, 0, 200, "a2", 5000, 4800, 5000, 200, 200)]),
+    }
+    locus = _hub_locus('collapse', extra_alignments=alignments)
+
+    assert _flank_relations(locus.downstream_flanks) == [
+        ("gene_b1", 200, 0), ("gene_b2", 100, 1), ("gene_b3", 100, 1)]
+    assert _flank_relations(locus.upstream_flanks) == [("gene_a1", 200, 0), ("gene_a2", 200, 1)]
 
 
 def test_variant_mode_walks_flanks_only_from_the_ends_of_the_stitched_path():

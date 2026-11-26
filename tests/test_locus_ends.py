@@ -35,13 +35,13 @@ def _records(rows, strands=None):
     return [batch.get_record(i) for i in range(len(batch))]
 
 
-def _ends(lengths, edges, alignments=None, hub_branches=True):
+def _locus_ends(lengths, edges, alignments=None, hub_branches=True):
     graph = AssemblyGraph(edges, lengths)
     return LocusEnds(graph, Hubs(graph), alignments or {}, hub_branches)
 
 
 # A local locus: where its target runs past the contig end (#66) ------------------------------------------------------
-A_TO_B = _ends({"ctgA": 1000, "ctgB": 1000}, [Edge("ctgA", F, "ctgB", F, overlap=100)])
+A_TO_B = _locus_ends({"ctgA": 1000, "ctgB": 1000}, [Edge("ctgA", F, "ctgB", F, overlap=100)])
 
 
 def test_a_local_locus_spans_its_copys_alignments_read_on_its_first_targets_strand():
@@ -87,7 +87,9 @@ def test_a_target_starting_at_its_contigs_start_runs_back_past_it_upstream(stran
     # IS1 starts on ctgX at its position 200: on '+' its first 200 bp run back off ctgX's start onto ctgU; on '-', read
     # along ctgX-, off ctgX's end
     edges = [Edge("ctgU", F, "ctgX", F)] if strand == F else [Edge("ctgX", F, "ctgU", F)]
-    ends = _ends({"ctgU": 1000, "ctgX": 300}, edges).local(_records([(1000, 200, 500, "ctgX", 300, 0, 300)], [strand]))
+    records = _records([(1000, 200, 500, "ctgX", 300, 0, 300)], [strand])
+
+    ends = _locus_ends({"ctgU": 1000, "ctgX": 300}, edges).local(records)
 
     assert ends.upstream.beyond_upstream == 200
 
@@ -106,7 +108,7 @@ def test_a_stitched_locus_runs_on_upstream_from_its_first_fragment_and_downstrea
     first, last = _records([(1000, 300, 600, "ctgB", 1000, 0, 300), (1000, 0, 300, "ctgA", 1000, 695, 995)])
     edges = [Edge("ctgU", F, "ctgB", F), Edge("ctgA", F, "ctgD", F)]
 
-    ends = _ends({"ctgU": 1000, "ctgB": 1000, "ctgA": 1000, "ctgD": 1000}, edges).stitched([first, last])
+    ends = _locus_ends({"ctgU": 1000, "ctgB": 1000, "ctgA": 1000, "ctgD": 1000}, edges).stitched([first, last])
 
     assert (ends.upstream.contig, ends.upstream.beyond_upstream, ends.upstream.beyond_downstream) == ("ctgB", 300, 0)
     assert (ends.downstream.contig, ends.downstream.beyond_upstream, ends.downstream.beyond_downstream) == (
@@ -133,7 +135,8 @@ def _hub_path():
 
 
 def _hub_branches(alignments=None, extra_edges=(), hub_branches=True):
-    return _ends(HUB_LENGTHS, HUB_EDGES + list(extra_edges), alignments, hub_branches).stitched(_hub_path()).branches
+    locus_ends = _locus_ends(HUB_LENGTHS, HUB_EDGES + list(extra_edges), alignments, hub_branches)
+    return locus_ends.stitched(_hub_path()).branches
 
 
 def test_a_hub_has_a_branch_for_every_other_link_leaving_its_outermost_contigs():
@@ -147,6 +150,13 @@ def test_a_hub_has_a_branch_for_every_other_link_leaving_its_outermost_contigs()
 
 def test_variant_mode_has_no_hub_branches():
     assert _hub_branches(hub_branches=False) is None
+
+
+def test_a_stitched_path_with_no_hub_has_no_branches():
+    # IS1 runs off ctgA's end straight into ctgB: no contig is covered end to end, so there is no hub
+    fragments = _records([(1000, 0, 300, "ctgA", 1000, 700, 1000), (1000, 300, 1000, "ctgB", 1000, 0, 700)])
+
+    assert A_TO_B.stitched(fragments).branches is None
 
 
 def test_a_link_leading_back_into_the_hub_is_not_a_branch():
@@ -165,7 +175,7 @@ def test_a_link_out_of_the_middle_of_a_hub_is_not_a_branch():
     first, _, last = _hub_path()
     h1, h2 = (dataclasses.replace(first, idx=-1, t_name=c, t_length=500, t_start=0, t_end=500) for c in ("h1", "h2"))
 
-    branches = _ends(lengths, edges).stitched([first, h1, h2, last]).branches
+    branches = _locus_ends(lengths, edges).stitched([first, h1, h2, last]).branches
 
     assert branches.upstream == () and [b.link.v for b in branches.downstream] == ["b2"]
 
@@ -174,7 +184,7 @@ def test_a_path_ending_on_the_hubs_edge_has_no_branch_on_that_side():
     # The path's last fragment is the hub itself, so the walk from it already leaves by every link downstream
     first, hub, _ = _hub_path()
 
-    branches = _ends(HUB_LENGTHS, HUB_EDGES).stitched([first, hub]).branches
+    branches = _locus_ends(HUB_LENGTHS, HUB_EDGES).stitched([first, hub]).branches
 
     assert [b.link.v for b in branches.upstream] == ["a2"] and branches.downstream == ()
 
@@ -203,7 +213,8 @@ def test_an_alignment_starting_past_the_overlap_is_not_carried_onto_the_branch()
 
 @pytest.mark.parametrize("start, carried", [(10, 200), (11, 0)])
 def test_only_an_alignment_starting_within_the_entry_slack_is_carried_onto_the_branch(start, carried):
-    # b3 is entered backwards, so an alignment ending `start` bp short of its end starts that far in
-    alignments = {"b3": _batch([(1600, 1400, 1590 - start, "b3", 1000, 800, 1000 - start)], [R])}
+    # b2 is entered forwards at its start, b3 backwards at its end: an alignment `start` bp in starts that far in
+    alignments = {"b2": _batch([(1600, 1400, 1590 - start, "b2", 1000, start, 300)]),
+                  "b3": _batch([(1600, 1400, 1590 - start, "b3", 1000, 800, 1000 - start)], [R])}
 
-    assert _hub_branches(alignments).downstream[1].carried == carried
+    assert [b.carried for b in _hub_branches(alignments).downstream] == [carried, carried]
