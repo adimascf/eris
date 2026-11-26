@@ -14,14 +14,14 @@ from mappy import ThreadBuffer
 from pyfgs import GeneFinder, Model, Gene, Mutation
 
 from eris.io import TargetDatabase, GenomeAssembly, gene_id
-from eris.graph import AssemblyGraph, TopologyEngine, Edge
-from eris.flanks import FlankSearch, FlankCandidate, Flanks, TargetSpan, Branch, HubBranches, BudgetRule
+from eris.graph import AssemblyGraph, TopologyEngine
+from eris.flanks import FlankSearch, FlankCandidate, TargetSpan, BudgetRule
 from eris.hub import Hubs
 from eris.alignment import AlignmentBatch, AlignmentRecord, pooled_identity
 from eris.interval import IntervalBatch, Context, Strand, Interval
 from eris.constants import FeatureType, Orientation, Effect, DEFAULT_MAX_FLANK_DISTANCE
 from eris.copy_number import CopyNumber, assign_copy_numbers
-from eris.target_end import beyond_contig_end, carried_past_link
+from eris.locus_ends import Ends, LocusEnds
 
 
 # DataClasses ----------------------------------------------------------------------------------------------------------
@@ -267,7 +267,6 @@ class LocusBuilder:
         self.features = features or {}
         self.genes = genes or {}
         self.gene_intervals = gene_intervals or {}
-        self.alignments: dict[str, AlignmentBatch] = {}
         self.hubs = Hubs(topology_engine.graph)
         rule = BudgetRule.PER_BRANCH if self._collapse else BudgetRule.SHARED
         self.flank_search = FlankSearch(topology_engine.graph, self.gene_intervals, flank_budget, max_flank_distance,
@@ -289,7 +288,7 @@ class LocusBuilder:
         """
 
         # The real alignments, before stitching adds synthetic records: a hub's branches are measured from them (#65)
-        self.alignments = alignments
+        locus_ends = LocusEnds(self.topology_engine.graph, self.hubs, alignments, hub_branches=self._collapse)
         # Now expects a list of paths (lists of AlignmentRecords) instead of pairs
         cleaned_alignments, resolved_paths = self.topology_engine.resolve_split_alignments(alignments)
 
@@ -303,7 +302,7 @@ class LocusBuilder:
         if self._collapse:
             kept_paths = self._one_path_per_hub(kept_paths)
         for path in kept_paths:
-            yield self._stitch(path)
+            yield self._stitch(path, locus_ends)
 
         # Filter and yield LOCAL (unstitched) alignments
         for contig_id, batch in cleaned_alignments.items():
@@ -313,7 +312,7 @@ class LocusBuilder:
 
             if len(intact_batch) > 0:
                 contig_gene_intervals = self.gene_intervals.get(contig_id, IntervalBatch.empty())
-                for locus in self._build_local(contig_id, intact_batch, contig_gene_intervals):
+                for locus in self._build_local(contig_id, intact_batch, contig_gene_intervals, locus_ends):
                     yield locus
 
     def _one_path_per_hub(self, paths: list[list['AlignmentRecord']]) -> list[list['AlignmentRecord']]:
@@ -330,50 +329,11 @@ class LocusBuilder:
             return sum(f.q_end - f.q_start for f in path if f.idx != -1), pooled_identity(path)
         return [max((paths[i] for i in members), key=aligned_bases) for _, members in groups]
 
-    def _hub_branch_links(self, fragments: list['AlignmentRecord']) -> tuple[list[Edge], list[Edge]]:
-        """
-        In collapse mode, the links leaving a stitched path's repeat hub upstream and downstream, other than those the
-        flank walk from the path's own end contig already follows (#56). A hub reported once stands for every copy
-        collapsed into it, so each of its links is a branch with its own flanks. Only the links leaving the hub's
-        outermost contig on each side count (see `Hubs.leaving_outermost`). Variant mode has none: each path through a
-        hub is its own locus.
-        """
-        if not self._collapse:
-            return [], []
-        hub = self.hubs.of_path(fragments)
-        if not hub:
-            return [], []
-        # fragments are in the target's direction, so the hub's first contig is upstream
-        (first, _), (last, _) = hub.contigs[0], hub.contigs[-1]
-        links_by_side: list[list[Edge]] = []
-        for side, end, outer in ((-1, fragments[0], first), (1, fragments[-1], last)):
-            if end.t_name == outer:  # the walk starts on the hub's edge, so it already leaves by every link
-                links_by_side.append([])
-                continue
-            # The walk from the end contig is the branch along the link into it
-            links_by_side.append([e for e in self.hubs.leaving_outermost(hub, side)
-                                  if (e.v, e.v_strand) != (end.t_name, end.strand * side)])
-        return links_by_side[0], links_by_side[1]
-
-    def _hub_branches(self, fragments: list['AlignmentRecord']) -> Optional[HubBranches]:
-        """
-        The branches of a stitched path's repeat hub (see `_hub_branch_links`), each with the target its copy carries
-        onto the branch (see `carried_past_link`); None if it has none. Once a hub's branches are walked, none may loop
-        back into the stitched path: its genes are passengers.
-        """
-        u_links, d_links = self._hub_branch_links(fragments)
-        if not (u_links or d_links):
-            return None
-        lengths = self.topology_engine.graph.contig_lengths
-        return HubBranches(tuple(Branch(e, carried_past_link(e, self.alignments, lengths)) for e in u_links),
-                           tuple(Branch(e, carried_past_link(e, self.alignments, lengths)) for e in d_links),
-                           frozenset(f.t_name for f in fragments))
-
-    def _add_flanks(self, locus: 'Locus', flanks: 'Flanks', first: TargetSpan,
-                    last: Optional[TargetSpan] = None) -> None:
-        """Adds the flanks the flank search found, upstream of `first` and downstream of `last`, to the locus."""
-        locus.upstream_flanks.extend(self._flank(c, first) for c in flanks.upstream)
-        locus.downstream_flanks.extend(self._flank(c, last or first) for c in flanks.downstream)
+    def _add_flanks(self, locus: 'Locus', ends: Ends) -> None:
+        """Searches for the flanks of a locus from its ends and adds them to it."""
+        flanks = self.flank_search.search(ends.upstream, ends.downstream, branches=ends.branches)
+        locus.upstream_flanks.extend(self._flank(c, ends.upstream) for c in flanks.upstream)
+        locus.downstream_flanks.extend(self._flank(c, ends.downstream) for c in flanks.downstream)
 
     def _passenger(self, contig: str, idx: int, intervals: 'IntervalBatch', target_strand: Strand,
                    target_bounds: tuple[int, int]) -> FeatureRelation:
@@ -424,8 +384,8 @@ class LocusBuilder:
             topological_dist=topo, orientation=orientation, effect=effect
         )
 
-    def _build_local(self, contig: str, alignment_batch: 'AlignmentBatch', gene_intervals: 'IntervalBatch') -> list[
-        'Locus']:
+    def _build_local(self, contig: str, alignment_batch: 'AlignmentBatch', gene_intervals: 'IntervalBatch',
+                     locus_ends: LocusEnds) -> list['Locus']:
         """
         Identifies loci within a single contig: one per IS copy its alignments lie on (see
         `same_copy_groups`), so two IS copies that only touch are two loci, each with its own strand and sides (#57).
@@ -433,7 +393,8 @@ class LocusBuilder:
         loci = []
         for group in same_copy_groups(alignment_batch, self.locus_tolerance):
             targets = [alignment_batch.get_record(idx) for idx in group]
-            span = Interval(int(alignment_batch.t_starts[group].min()), int(alignment_batch.t_ends[group].max()))
+            ends = locus_ends.local(targets)
+            span = ends.upstream
 
             target_features = [
                 GenomicFeature(t.q_name, self.target_feature_type,
@@ -449,24 +410,17 @@ class LocusBuilder:
                 fractional_depth=1.0 if self.genome.has_depth else None
             )
 
-            # The locus is read on its first target's strand
-            primary_strand = Strand(targets[0].strand)
-            span_bounds = (span.start, span.end)
-
             for idx in gene_intervals.query(span.start, span.end):
-                locus.passengers.append(self._passenger(contig, idx, gene_intervals, primary_strand, span_bounds))
+                locus.passengers.append(self._passenger(contig, idx, gene_intervals, span.strand,
+                                                        (span.start, span.end)))
 
-            graph = self.topology_engine.graph
-            target = TargetSpan(contig, span.start, span.end, primary_strand,
-                                beyond_contig_end(targets, primary_strand, Context.UPSTREAM, graph),
-                                beyond_contig_end(targets, primary_strand, Context.DOWNSTREAM, graph))
-            self._add_flanks(locus, self.flank_search.search(target), target)
+            self._add_flanks(locus, ends)
 
             loci.append(locus)
 
         return loci
 
-    def _stitch(self, fragments: list['AlignmentRecord']) -> 'Locus':
+    def _stitch(self, fragments: list['AlignmentRecord'], locus_ends: LocusEnds) -> 'Locus':
         """Stitches multiple fragments into a single multi-contig locus."""
         first = fragments[0]
         last = fragments[-1]
@@ -501,14 +455,7 @@ class LocusBuilder:
         )
 
         # 2. FLANKS: upstream from the first fragment, downstream from the last
-        first_span = TargetSpan(first.t_name, first.t_start, first.t_end, Strand(first.strand),
-                                beyond_upstream=beyond_contig_end([first], Strand(first.strand), Context.UPSTREAM,
-                                                                  self.topology_engine.graph))
-        last_span = TargetSpan(last.t_name, last.t_start, last.t_end, Strand(last.strand),
-                               beyond_downstream=beyond_contig_end([last], Strand(last.strand), Context.DOWNSTREAM,
-                                                                   self.topology_engine.graph))
-        flanks = self.flank_search.search(first_span, last_span, branches=self._hub_branches(fragments))
-        self._add_flanks(locus, flanks, first_span, last_span)
+        self._add_flanks(locus, locus_ends.stitched(fragments))
 
         # 3. INSIDE PASSENGERS (Sweep across ALL fragments, including unaligned synthetic bubbles)
         for frag in fragments:
