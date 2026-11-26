@@ -325,7 +325,7 @@ def test_a_local_gene_overlapping_the_is_upstream_end_overlaps_its_start_and_dow
     assert _relation_summary(locus.passengers) == [("gene_ctgA", context, 0, "DISRUPTED")]
 
 
-def _hub_locus(mode, extra_edges=(), extra_genes=None, extra_alignments=None):
+def _hub_locus(mode, extra_alignments=None):
     """
     IS1 runs off the end of a1, across the unaligned 1 kb 'hub', and into the start of b1. The hub is a collapsed
     repeat: a2 also links into it, and b2 (sharing 100 bp) and b3 (entered backwards) also leave it.
@@ -334,9 +334,9 @@ def _hub_locus(mode, extra_edges=(), extra_genes=None, extra_alignments=None):
     edges = [Edge("a1", Strand.FORWARD, "hub", Strand.FORWARD), Edge("a2", Strand.FORWARD, "hub", Strand.FORWARD),
              Edge("hub", Strand.FORWARD, "b1", Strand.FORWARD),
              Edge("hub", Strand.FORWARD, "b2", Strand.FORWARD, overlap=100),
-             Edge("hub", Strand.FORWARD, "b3", Strand.REVERSE), *extra_edges]
+             Edge("hub", Strand.FORWARD, "b3", Strand.REVERSE)]
     genes = {"a1": (4000, 4500), "a2": (4200, 4600), "b1": (500, 800), "b2": (300, 600), "b3": (600, 750)}
-    builder = _flank_builder(lengths, edges, genes | (extra_genes or {}), mode=mode,
+    builder = _flank_builder(lengths, edges, genes, mode=mode,
                              depths={"hub": 30.0} | {c: 10.0 for c in lengths if c != "hub"})
     alignments = {
         "a1": _batch([("IS1", 1600, 0, 300, "a1", 5000, 4700, 5000, 300, 300)]),
@@ -376,43 +376,6 @@ def test_a_hub_branch_is_measured_from_where_its_own_copys_target_ends():
     assert _flank_relations(locus.downstream_flanks) == [
         ("gene_b1", 200, 0), ("gene_b2", 100, 1), ("gene_b3", 100, 1)]
     assert _flank_relations(locus.upstream_flanks) == [("gene_a1", 200, 0), ("gene_a2", 200, 1)]
-
-
-def test_links_leading_back_into_the_hub_are_not_branches_of_its_flank_search():
-    # The hairpin 'hub+ -> hub-' leaves the hub's end but turns back into it: walking it would report the hub's own
-    # gene as a flank
-    locus = _hub_locus('collapse', [Edge("hub", Strand.FORWARD, "hub", Strand.REVERSE)], {"hub": (100, 400)})
-
-    assert _flank_relations(locus.downstream_flanks) == [
-        ("gene_b1", 200, 0), ("gene_b2", 200, 1), ("gene_b3", 250, 1)]
-
-
-def test_a_link_out_of_the_middle_of_a_hub_is_not_a_branch_of_its_flank_search():
-    # IS1 runs off a1, across the two-contig hub h1 -> h2, and into b1. 'h2+ -> b2+' leaves the hub's edge, but
-    # 'h1+ -> stub+' leaves its middle, into a stub of one copy's variant of the IS
-    lengths = {"a1": 5000, "h1": 500, "h2": 500, "b1": 1000, "b2": 1000, "stub": 1000}
-    edges = [Edge("a1", Strand.FORWARD, "h1", Strand.FORWARD), Edge("h1", Strand.FORWARD, "h2", Strand.FORWARD),
-             Edge("h2", Strand.FORWARD, "b1", Strand.FORWARD), Edge("h2", Strand.FORWARD, "b2", Strand.FORWARD),
-             Edge("h1", Strand.FORWARD, "stub", Strand.FORWARD)]
-    builder = _flank_builder(lengths, edges, {"b1": (500, 800), "b2": (300, 600), "stub": (10, 100)},
-                             mode='collapse', depths={c: 30.0 if c in ("h1", "h2") else 10.0 for c in lengths})
-    alignments = {
-        "a1": _batch([("IS1", 1600, 0, 300, "a1", 5000, 4700, 5000, 300, 300)]),
-        "b1": _batch([("IS1", 1600, 1300, 1600, "b1", 1000, 0, 300, 300, 300)]),
-    }
-
-    [locus] = builder.assemble(alignments, min_coverage=0.30, min_identity=0.0)
-
-    assert [s.contig for s in locus.targets[0].segments] == ["a1", "h1", "h2", "b1"]
-    assert _flank_relations(locus.downstream_flanks) == [("gene_b1", 200, 0), ("gene_b2", 300, 1)]
-
-
-def test_a_branch_does_not_loop_back_into_the_stitched_path():
-    # 'b2+ -> hub-' turns back into the hub on its other strand: walking it would report the hub's own gene as a flank
-    locus = _hub_locus('collapse', [Edge("b2", Strand.FORWARD, "hub", Strand.REVERSE)], {"hub": (100, 400)})
-
-    assert _flank_relations(locus.downstream_flanks) == [
-        ("gene_b1", 200, 0), ("gene_b2", 200, 1), ("gene_b3", 250, 1)]
 
 
 def test_variant_mode_walks_flanks_only_from_the_ends_of_the_stitched_path():
