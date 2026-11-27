@@ -1,4 +1,5 @@
 import re
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,7 +9,8 @@ from pyfgs import FaaWriter, FnaWriter, GeneFinder, Gff3Writer, Model
 
 from eris.constants import Strand
 from eris.copy_number import CopyNumber
-from eris.io import GENE_SOURCE, OutputManager, ReportRow, format_contig_path, format_gff_line, format_identities, gene_id
+from eris.graph import Edge
+from eris.io import GENE_SOURCE, GfaReader, GfaWriter, OutputManager, ReportRow, format_contig_path, format_gff_line, format_identities, gene_id
 from eris.pipeline import GenomicFeature, LocationSegment, Locus, Pipeline
 
 
@@ -276,3 +278,26 @@ def test_gff_notes_every_frameshift_of_a_pseudogene_as_pyfgs_does():
         f"ctg1\t{GENE_SOURCE}\tpseudogene\t100\t600\t1.30\t-\t0\tID=ctg1_100_600;"
         f"inference=ab initio prediction:{GENE_SOURCE};pseudogene=unknown;"
         "Note=Frameshift insertion at pos 120 (codon 7),Frameshift deletion at pos 300 (codon 67)\n")
+
+
+def test_gfa_writer_round_trips_mixed_strand_links_with_their_overlaps():
+    edges = [
+        Edge("a", Strand.FORWARD, "b", Strand.REVERSE, 10),
+        Edge("b", Strand.REVERSE, "c", Strand.FORWARD, 5),
+    ]
+
+    handle = StringIO()
+    writer = GfaWriter(handle)
+    for edge in edges:
+        writer.write(edge)
+
+    assert handle.getvalue() == "L\ta\t+\tb\t-\t10M\nL\tb\t-\tc\t+\t5M\n"
+
+    handle.seek(0)
+    assert list(GfaReader(handle)) == edges
+
+
+def test_gfa_writer_writes_an_unknown_overlap_as_a_star():
+    handle = StringIO()
+    GfaWriter(handle).write(Edge("a", Strand.FORWARD, "b", Strand.FORWARD))
+    assert handle.getvalue() == "L\ta\t+\tb\t+\t*\n"

@@ -104,7 +104,10 @@ class GfaWriter(_Handle):
     def write(self, item: Union[Edge, SeqRecord]) -> int:
         """Writes an Edge (Link) or SeqRecord (Segment) to the file."""
         if isinstance(item, Edge):
-            return self._handle.write(f"L\t{item.u}\t{item.u_strand}\t{item.v}\t{item.u_strand}\t*\n")
+            overlap = f"{item.overlap}M" if item.overlap else "*"
+            return self._handle.write(
+                f"L\t{item.u}\t{item.u_strand}\t{item.v}\t{item.v_strand}\t{overlap}\n"
+            )
         elif isinstance(item, SeqRecord):
             return self._handle.write(f"S\t{item.id}\t{item.seq}\n")
         raise TypeError(f"Unsupported type: {type(item)}")
