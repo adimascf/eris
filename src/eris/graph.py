@@ -180,7 +180,7 @@ class TopologyEngine:
         resolved_paths = []
         used_records = set()  # Tracks (t_name, idx) of fragments successfully stitched
 
-        # 2. Fragment Chaining via DAG DFS
+        # 2. Fragment chaining: the best chain from each fragment, searching each pair of fragments once
         for q_name, fragments in partial_alns.items():
             # Sort strictly by 5' -> 3' query coordinates
             fragments.sort(key=lambda x: x.q_start)
@@ -194,90 +194,60 @@ class TopologyEngine:
             can_leave = [f.hangs_3p(o + OVERLAP_SLACK) for f, o in zip(fragments, exit_overlaps)]
             can_enter = [f.hangs_5p(o + OVERLAP_SLACK) for f, o in zip(fragments, entry_overlaps)]
 
+            # The synthetic nodes joining fragment a to fragment b, or None if the graph doesn't join them. Each pair
+            # is searched once: a tangled repeat shreds a target into dozens of fragments with exponentially many
+            # chains between them, and searching per chain never finishes (BPH2947)
+            joins = {}
+
+            def join(a: int, b: int) -> list['AlignmentRecord'] | None:
+                if (a, b) not in joins:
+                    joins[(a, b)] = self._join_fragments(fragments[a], fragments[b])
+                return joins[(a, b)]
+
+            def best_chain_from(a: int, best: dict, visiting: set) -> tuple[tuple[int, int], list, set[int]]:
+                """The chain from fragment a reaching furthest along the target, then through the most fragments.
+
+                Each fragment's best chain is found once and reused by every chain reaching it. A step back into a
+                fragment still being searched would loop, so it is skipped; the graph between fragments of one
+                target is almost always acyclic, and then this is the best chain over all of them. On a tie, the
+                later fragment in target order wins.
+                """
+                if a in best:
+                    return best[a]
+                visiting.add(a)
+                curr_frag = fragments[a]
+                result = ((curr_frag.q_end, 1), [curr_frag], {a})
+                for b in reversed(range(len(fragments))):
+                    next_frag = fragments[b]
+                    if b == a or b in used_in_this_qname or b in visiting:
+                        continue
+                    # Stitching joins contigs; two fragments on one contig at the right spacing are the inverted
+                    # repeats of a cross-mapping relative, and the graph search would call them adjacent
+                    if next_frag.t_name == curr_frag.t_name:
+                        continue
+                    expected_gap = next_frag.q_start - curr_frag.q_end
+                    if not (can_leave[a] and can_enter[b] and
+                            expected_gap >= -min(exit_overlaps[a], entry_overlaps[b]) - OVERLAP_SLACK):
+                        continue
+                    if (between := join(a, b)) is None:
+                        continue
+                    (reach, n_frags), chain, used = best_chain_from(b, best, visiting)
+                    # On equal coverage, prefer the chain through more real fragments over one that
+                    # jumps past them and turns them into synthetic nodes
+                    if a not in used and (reach, n_frags + 1) > result[0]:
+                        result = ((reach, n_frags + 1), [curr_frag, *between, *chain], {a} | used)
+                visiting.discard(a)
+                best[a] = result
+                return result
+
             for i in range(len(fragments)):
                 if i in used_in_this_qname:
                     continue
 
-                start_frag = fragments[i]
-                # Stack: (current_frag_index, sequence_of_records, set_of_used_indices)
-                stack = [(i, [start_frag], {i})]
+                # Chains found from earlier starts use up their fragments, which changes later best chains
+                _, best_chain, best_chain_used = best_chain_from(i, {}, set())
 
-                best_chain = []
-                best_chain_score = (0, 0)
-                best_chain_used = set()
-
-                while stack:
-                    curr_idx, curr_path, curr_used = stack.pop()
-                    curr_frag = curr_path[-1]  # The last real alignment in the chain
-
-                    extended = False
-                    for j in range(len(fragments)):
-                        if j in curr_used or j in used_in_this_qname:
-                            continue
-
-                        next_frag = fragments[j]
-                        expected_gap = next_frag.q_start - curr_frag.q_end
-
-                        # Stitching joins contigs; two fragments on one contig at the right spacing are the inverted
-                        # repeats of a cross-mapping relative, and the graph search would call them adjacent
-                        if next_frag.t_name == curr_frag.t_name:
-                            continue
-
-                        if not (can_leave[curr_idx] and can_enter[j] and
-                                expected_gap >= -min(exit_overlaps[curr_idx], entry_overlaps[j]) - OVERLAP_SLACK):
-                            continue
-
-                        # Ask the graph if these two fragments physically connect
-                        fits = partial(self._fits, curr_frag, next_frag, expected_gap)
-                        if self.mode == 'collapse':
-                            paths = self._find_collapsed_path(
-                                curr_frag.t_name, curr_frag.strand,
-                                next_frag.t_name, next_frag.strand,
-                                expected_gap, tolerance=2000, fits=fits
-                            )
-                        else:
-                            paths = self._find_bounded_paths(
-                                curr_frag.t_name, curr_frag.strand,
-                                next_frag.t_name, next_frag.strand,
-                                expected_gap, tolerance=2000, fits=fits
-                            )
-
-
-                        if paths:
-                            path_lengths = np.array([p['length'] for p in paths])
-                            bottleneck_depths = np.array([p['min_depth'] for p in paths])
-                            source_depth = self.contig_depths.get(curr_frag.t_name, 1.0)
-
-                            # CRITICAL FIX: Safe, absolute normalization for negative gaps
-                            norm_factor = np.abs(expected_gap) + 50
-                            len_penalty = np.maximum(1.0 - (np.abs(path_lengths - expected_gap) / norm_factor), 0)
-
-                            depth_fraction = bottleneck_depths / source_depth
-                            scores = len_penalty * depth_fraction
-
-                            best_p_idx = np.argmax(scores)
-                            if scores[best_p_idx] > 0.05:  # Biological winner
-
-                                winning = paths[best_p_idx]
-                                extension = self._build_stitching_payload(curr_frag, next_frag, winning['contigs'],
-                                                                          winning['strands'])
-
-                                # Extend the path with the synthetic nodes + next_frag and recurse!
-                                new_path = curr_path + extension[1:]
-                                stack.append((j, new_path, curr_used | {j}))
-                                extended = True
-
-                    # If we can't extend this branch further, evaluate its total coverage
-                    if not extended:
-                        # On equal coverage, prefer the chain through more real fragments over one that
-                        # jumps past them and turns them into synthetic nodes
-                        chain_score = (curr_path[-1].q_end - curr_path[0].q_start, len(curr_used))
-                        if chain_score > best_chain_score:
-                            best_chain = curr_path
-                            best_chain_score = chain_score
-                            best_chain_used = curr_used
-
-                # If the DFS successfully chained multiple fragments together
+                # If the search successfully chained multiple fragments together
                 if len(best_chain_used) > 1:
 
                     # Temporarily store all valid chains for this specific IS
@@ -318,6 +288,34 @@ class TopologyEngine:
                 cleaned_alignments[contig_id] = intact_batch
 
         return cleaned_alignments, resolved_paths
+
+    def _join_fragments(self, curr_frag: 'AlignmentRecord',
+                        next_frag: 'AlignmentRecord') -> list['AlignmentRecord'] | None:
+        """The synthetic nodes for the best graph path from one fragment to the next, or None if no path scores."""
+        expected_gap = next_frag.q_start - curr_frag.q_end
+        # Ask the graph if these two fragments physically connect
+        fits = partial(self._fits, curr_frag, next_frag, expected_gap)
+        search = self._find_collapsed_path if self.mode == 'collapse' else self._find_bounded_paths
+        paths = search(curr_frag.t_name, curr_frag.strand, next_frag.t_name, next_frag.strand,
+                       expected_gap, tolerance=2000, fits=fits)
+        if not paths:
+            return None
+        path_lengths = np.array([p['length'] for p in paths])
+        bottleneck_depths = np.array([p['min_depth'] for p in paths])
+        source_depth = self.contig_depths.get(curr_frag.t_name, 1.0)
+
+        # CRITICAL FIX: Safe, absolute normalization for negative gaps
+        norm_factor = np.abs(expected_gap) + 50
+        len_penalty = np.maximum(1.0 - (np.abs(path_lengths - expected_gap) / norm_factor), 0)
+
+        depth_fraction = bottleneck_depths / source_depth
+        scores = len_penalty * depth_fraction
+
+        best_p_idx = np.argmax(scores)
+        if scores[best_p_idx] <= 0.05:  # No biological winner
+            return None
+        winning = paths[best_p_idx]
+        return self._build_stitching_payload(curr_frag, next_frag, winning['contigs'], winning['strands'])[1:-1]
 
     @staticmethod
     def _consume_chain(chain: list['AlignmentRecord'], alignments: dict, used_records: set) -> None:

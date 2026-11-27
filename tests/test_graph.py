@@ -456,3 +456,36 @@ def test_synthetic_node_carries_the_strand_its_contig_is_entered_on(mode):
 
     assert [(f.t_name, Strand(f.strand)) for f in paths[0]] == [
         ("ctgA", Strand.FORWARD), ("ctgB", Strand.REVERSE), ("ctgC", Strand.FORWARD)]
+
+
+def test_resolve_chains_a_tangle_of_fragments_in_polynomial_searches(monkeypatch):
+    # A target shredded across a ladder of bubbles: each layer has two parallel contigs carrying the same stretch of
+    # the target, and every contig links to both of the next layer's. There are 2**layers chains through it, so a
+    # search that enumerates chains never finishes on a real tangle (BPH2947, 79 fragments of one IS1182-family IS).
+    layers, step = 12, 100
+    contigs = [[f"L{layer}{side}" for side in "ab"] for layer in range(layers)]
+    edges = [Edge(a, Strand.FORWARD, b, Strand.FORWARD, overlap=0)
+             for left, right in zip(contigs, contigs[1:]) for a in left for b in right]
+    contig_lengths = {c: step for layer in contigs for c in layer}
+    engine = TopologyEngine(AssemblyGraph(edges, contig_lengths), dict.fromkeys(contig_lengths, 10.0), mode='variant')
+    alignments = {c: _fragment("IS1", layers * step, i * step, (i + 1) * step, c, step, 0, step)
+                  for i, layer in enumerate(contigs) for c in layer}
+
+    searches = 0
+    find = TopologyEngine._find_bounded_paths
+    def counting(self, *args, **kwargs):
+        nonlocal searches
+        searches += 1
+        return find(self, *args, **kwargs)
+    monkeypatch.setattr(TopologyEngine, '_find_bounded_paths', counting)
+
+    cleaned, paths = engine.resolve_split_alignments(alignments)
+
+    n = len(alignments)
+    assert searches <= n * n
+    # Both strands of the ladder are stitched end to end, through one real fragment per layer
+    assert len(paths) == 2
+    for path in paths:
+        assert (path[0].q_start, path[-1].q_end) == (0, layers * step)
+        assert all(f.idx != -1 for f in path) and len(path) == layers
+    assert not cleaned
